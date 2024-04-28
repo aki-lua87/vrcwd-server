@@ -15,12 +15,13 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-var targetFileName string
+// var targetFileName string
 
 // App struct
 type App struct {
-	ctx     context.Context
-	teststr string
+	ctx              context.Context
+	targetFolderPath string
+	targetFileName   string
 }
 
 type SaveData struct {
@@ -42,7 +43,9 @@ func (a *App) OutputLog(logstring string) {
 
 func (a *App) SetFileName(fileName string) {
 	log.Default().Println("[DEBUG] [LOG] SetFileName:" + fileName)
-	targetFileName = fileName
+	a.targetFileName = fileName
+	// setIntervalごとにファイルの内容も確認
+	a.ReadFile(a.targetFolderPath + "\\" + a.targetFileName)
 }
 
 func (a *App) LoadSetting() string {
@@ -61,12 +64,40 @@ func (a *App) LoadSetting() string {
 		log.Fatal(err)
 	}
 	log.Default().Println("[DEBUG] [LOG] LoadSetting Path:" + saveData.LogPath)
+	a.targetFolderPath = saveData.LogPath
 	return saveData.LogPath
 }
 
+func (a *App) OpenFolderSelectWindow() string {
+	log.Default().Println("[DEBUG] [LOG] OpenFolderSelectWindow")
+	// フォルダ選択ダイアログを開く
+	// 選択されたフォルダのパスを返す
+	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select LogFile Folder",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Default().Println("[DEBUG] [LOG] Target Path:" + path)
+	// JSONに保存
+	saveData := SaveData{LogPath: path}
+	// StructをJSONに変換
+	jsonData, err := json.Marshal(saveData)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// JSONをファイルに書き込む
+	err = os.WriteFile("setting.json", jsonData, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+	a.targetFolderPath = path
+	return path
+}
+
 // フォルダ内の最新のtxtファイルを探索し、そのファイル名を返す
-func (a *App) SelectLatestLogFile(path string) string {
-	log.Default().Println("[DEBUG] [LOG] SelectLatestLogFile")
+func (a *App) GetNewestFileName(path string) string {
+	log.Default().Println("[DEBUG] [LOG] GetNewestFileName")
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		log.Fatal(err)
@@ -96,39 +127,14 @@ func (a *App) SelectLatestLogFile(path string) string {
 		}
 	}
 	if newestFile != nil {
+		a.targetFileName = newestFile.Name()
 		return newestFile.Name()
 	}
 	return ""
 }
 
-func (a *App) OpenFolderSelectWindow() string {
-	log.Default().Println("[DEBUG] [LOG] OpenFolderSelectWindow")
-	// フォルダ選択ダイアログを開く
-	// 選択されたフォルダのパスを返す
-	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select LogFile Folder",
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Default().Println("[DEBUG] [LOG] Target Path:" + path)
-	// JSONに保存
-	saveData := SaveData{LogPath: path}
-	// StructをJSONに変換
-	jsonData, err := json.Marshal(saveData)
-	if err != nil {
-		log.Fatal(err)
-	}
-	// JSONをファイルに書き込む
-	err = os.WriteFile("setting.json", jsonData, 0644)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return path
-}
-
 // fsnotifyでの ファイルの監視を開始する
-func (a *App) WatchFile(folderpath string) {
+func (a *App) WatchFile() {
 	log.Default().Println("[DEBUG] [LOG] Start watching file")
 	lastOffset = 0
 	watcher, err := fsnotify.NewWatcher()
@@ -145,11 +151,9 @@ func (a *App) WatchFile(folderpath string) {
 				if !ok {
 					return
 				}
-				fullpath := folderpath + "\\" + targetFileName
-				// log.Default().Println("[DEBUG] [LOG] watching file: " + fullpath)
-				// log.Default().Println("[DEBUG] [LOG] [On Events]" + event.Name + event.Op.String())
+				fullpath := a.targetFolderPath + "\\" + a.targetFileName
 				if event.Name == fullpath {
-					a.readFile(fullpath)
+					a.ReadFile(fullpath)
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
@@ -160,7 +164,7 @@ func (a *App) WatchFile(folderpath string) {
 		}
 	}()
 
-	err = watcher.Add(folderpath)
+	err = watcher.Add(a.targetFolderPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -168,8 +172,13 @@ func (a *App) WatchFile(folderpath string) {
 }
 
 var lastOffset int64
+var readFileName string
 
-func (a *App) readFile(path string) {
+func (a *App) ResetOffset() {
+	lastOffset = 0
+}
+
+func (a *App) ReadFile(path string) {
 	log.Default().Println("[DEBUG] [LOG] call readFile")
 	log.Default().Println("[DEBUG] [LOG] lastOffset: ", lastOffset)
 	file, err := os.Open(path)
@@ -193,6 +202,7 @@ func (a *App) readFile(path string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Default().Println("[DEBUG] [LOG] newOffset: ", lastOffset)
 }
 
 // 行の評価
@@ -203,8 +213,7 @@ func (a *App) evaluateLine(line string) {
 		// substr と aaa の間の文字列を抽出する
 		worldID := strings.Split(strings.Split(line, substr)[1], ":")[0]
 		log.Default().Println(worldID)
-		a.teststr = worldID
-		runtime.EventsEmit(a.ctx, "debug", worldID)
+		runtime.EventsEmit(a.ctx, "worldID", worldID)
 	}
 	// 棋譜とかも、というか任意に取得したいよね
 }

@@ -1,9 +1,10 @@
 <script lang="ts">
   import logo from "./assets/images/logo-universal.png";
   import { OpenFolderSelectWindow } from "../wailsjs/go/main/App.js";
-  import { SelectLatestLogFile } from "../wailsjs/go/main/App.js";
+  import { GetNewestFileName } from "../wailsjs/go/main/App.js";
   import { SetFileName } from "../wailsjs/go/main/App.js";
   import { WatchFile } from "../wailsjs/go/main/App.js";
+  import { ResetOffset } from "../wailsjs/go/main/App.js";
   import { OutputLog } from "../wailsjs/go/main/App.js";
   import { LoadSetting } from "../wailsjs/go/main/App.js";
 
@@ -12,7 +13,13 @@
   let intervalId = 0;
   let debugText = "";
 
-  window.runtime.EventsOn("debug", (str) => (debugText += str + "\n"));
+  // worldID用のリスト
+  let worldIDList: string[] = [];
+
+  // worldIDListに追加
+  window.runtime.EventsOn("worldID", (worldID) => {
+    worldIDList.push(worldID);
+  });
 
   async function init() {
     OutputLog("App.svelte: init()");
@@ -23,7 +30,7 @@
     }
     await getLogFiles();
     intervalId = setInterval(getLogFiles, 5 * 60 * 1000);
-    WatchFile(logFilePath).then((result) => console.log(result));
+    WatchFile().then((result) => console.log(result));
   }
 
   init();
@@ -39,9 +46,14 @@
       return;
     }
     // ログフォルダ内のファイルを取得する
-    await SelectLatestLogFile(logFilePath).then(
+    const tempFileName = logFileName;
+    await GetNewestFileName(logFilePath).then(
       (result) => (logFileName = result),
     );
+    if (tempFileName != logFileName) {
+      await ResetOffset().then();
+    }
+    // 本当は↑に入れたいがなぜかログファイルが更新されないことがあるので
     await SetFileName(logFileName).then((result) => console.log(result));
   }
 </script>
@@ -58,8 +70,12 @@
   </div>
   <br />
   <div class="result">
-    デバッグ:
-    {debugText}
+    {#if worldIDList.length > 0}
+      Visit Worlds
+      {#each worldIDList as worldID}
+        <p>{worldID}</p>
+      {/each}
+    {/if}
   </div>
 </main>
 
