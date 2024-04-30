@@ -19,3 +19,9 @@ compatibility_date = "2023-12-01"
 
 # [ai]
 # binding = "AI"
+
+[[d1_databases]]
+binding = "DB" # i.e. available in your Worker on env.DB
+database_name = "vrc-history-database"
+database_id = "687f8473-b6bd-47f9-bd74-ed82f79372a4"
+migrations_dir = "drizzle/migrations"
