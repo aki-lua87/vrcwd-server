@@ -14,11 +14,17 @@
   let debugText = "";
 
   // worldID用のリスト
-  let worldIDList: string[] = [];
+  let worldIDList: string[] = ["1111", "22222"];
+  let userID = "dummy";
 
   // worldIDListに追加
-  window.runtime.EventsOn("worldID", (worldID) => {
-    worldIDList.push(worldID);
+  window.runtime.EventsOn("setWorldID", (id) => {
+    OutputLog("setWorldID:" + id);
+    worldIDList.push(id);
+  });
+  window.runtime.EventsOn("setUserID", (id) => {
+    OutputLog("setUserID:" + id);
+    userID = id;
   });
 
   async function init() {
@@ -69,6 +75,7 @@
     <div class="result">現在の監視対象: {logFileName}</div>
   </div>
   <br />
+  <p>あなたのユーザーID: {userID}</p>
   <div class="result">
     {#if worldIDList.length > 0}
       Visit Worlds

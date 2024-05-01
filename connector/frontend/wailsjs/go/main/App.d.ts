@@ -9,6 +9,8 @@ export function OpenFolderSelectWindow():Promise<string>;
 
 export function OutputLog(arg1:string):Promise<void>;
 
+export function PostWorldID(arg1:string):Promise<string>;
+
 export function ReadFile(arg1:string):Promise<void>;
 
 export function ResetOffset():Promise<void>;

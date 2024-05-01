@@ -18,6 +18,10 @@ export function OutputLog(arg1) {
   return window['go']['main']['App']['OutputLog'](arg1);
 }
 
+export function PostWorldID(arg1) {
+  return window['go']['main']['App']['PostWorldID'](arg1);
+}
+
 export function ReadFile(arg1) {
   return window['go']['main']['App']['ReadFile'](arg1);
 }

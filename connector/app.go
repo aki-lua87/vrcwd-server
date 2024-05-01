@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,12 +22,24 @@ import (
 // App struct
 type App struct {
 	ctx              context.Context
+	userID           string
 	targetFolderPath string
 	targetFileName   string
 }
 
 type SaveData struct {
 	LogPath string `json:"path"`
+}
+
+type WorldHistoriesResponse struct {
+	WorldHistories []WorldHistory
+}
+
+type WorldHistory struct {
+	WorldID string `json:"world_id"`
+	// WorldName      string `json:"world_name"`
+	// FirstVisitDate string `json:"created_at"`
+	// LastVisitDate  string `json:"updated_at"`
 }
 
 func NewApp() *App {
@@ -207,13 +221,44 @@ func (a *App) ReadFile(path string) {
 
 // 行の評価
 func (a *App) evaluateLine(line string) {
+	// ユーザIDを取得
+	substr := "User Authenticated: "
+	if strings.Contains(line, substr) {
+		// substr と aaa の間の文字列を抽出する
+		userID := strings.Split(strings.Split(line, "(")[1], ")")[0]
+		log.Default().Println(userID)
+		a.userID = userID
+		runtime.EventsEmit(a.ctx, "setUserID", userID)
+		return
+	}
 	// 訪れたワールドを取得
-	substr := "[Behaviour] Joining "
+	substr = "[Behaviour] Joining "
 	if strings.Contains(line, substr+"wrld_") {
 		// substr と aaa の間の文字列を抽出する
 		worldID := strings.Split(strings.Split(line, substr)[1], ":")[0]
 		log.Default().Println(worldID)
-		runtime.EventsEmit(a.ctx, "worldID", worldID)
+		runtime.EventsEmit(a.ctx, "setWorldID", worldID)
+		a.PostWorldID(worldID)
+		return
 	}
 	// 棋譜とかも、というか任意に取得したいよね
+}
+
+func (a *App) PostWorldID(worldID string) string {
+	// var data WorldHistory
+	URL := "http://localhost:8787" + "/u/" + a.userID + "/w/histories"
+	data := new(WorldHistory)
+	data.WorldID = worldID
+	data_json, _ := json.Marshal(data)
+	res, err := http.Post(URL, "application/json", bytes.NewBuffer(data_json))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Default().Println(string(body))
+	return "OK"
 }
