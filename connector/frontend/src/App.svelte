@@ -14,13 +14,14 @@
   let debugText = "";
 
   // worldID用のリスト
-  let worldIDList: string[] = ["1111", "22222"];
+  let worldID: string = "";
   let userID = "dummy";
 
   // worldIDListに追加
   window.runtime.EventsOn("setWorldID", (id) => {
     OutputLog("setWorldID:" + id);
-    worldIDList.push(id);
+    worldID = id;
+    // TODO: Svelteで配列にPushしたやつを反映させるやり方
   });
   window.runtime.EventsOn("setUserID", (id) => {
     OutputLog("setUserID:" + id);
@@ -77,11 +78,9 @@
   <br />
   <p>あなたのユーザーID: {userID}</p>
   <div class="result">
-    {#if worldIDList.length > 0}
-      Visit Worlds
-      {#each worldIDList as worldID}
-        <p>{worldID}</p>
-      {/each}
+    {#if worldID != ""}
+      Upload Visit Worlds ID
+      <p>{worldID}</p>
     {/if}
   </div>
 </main>

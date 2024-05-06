@@ -17,6 +17,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// backend url
+var backendURL string = "https://backend.jmnt34deg.workers.dev"
+
 // var targetFileName string
 
 // App struct
@@ -246,7 +249,7 @@ func (a *App) evaluateLine(line string) {
 
 func (a *App) PostWorldID(worldID string) string {
 	// var data WorldHistory
-	URL := "http://localhost:8787" + "/u/" + a.userID + "/w/histories"
+	URL := backendURL + "/u/" + a.userID + "/w/histories"
 	data := new(WorldHistory)
 	data.WorldID = worldID
 	data_json, _ := json.Marshal(data)

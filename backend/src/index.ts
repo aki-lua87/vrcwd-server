@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
 import { world_histories } from "./schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 type Bindings = {
@@ -20,6 +20,7 @@ app.get("/u/:user_id/w/histories", async (c) => {
     .select()
     .from(world_histories)
     .where(eq(world_histories.registered_user_id, id))
+    .orderBy(desc(world_histories.id))
     .all()
   return c.json(result);
 })
