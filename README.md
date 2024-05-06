@@ -1,2 +1,3 @@
 # vrc_world_history_server
-temp
+
+VRC World + Wails(Svelte) + Hono
