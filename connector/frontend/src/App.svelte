@@ -8,10 +8,16 @@
   import { OutputLog } from "../wailsjs/go/main/App.js";
   import { LoadSetting } from "../wailsjs/go/main/App.js";
 
-  let logFilePath: string;
+  import { onMount } from "svelte";
+  import Header from "./Header.svelte";
+  import Content from "./Content.svelte";
+  import Tabs from "./Tabs.svelte";
+  import Footer from "./Footer.svelte";
+
+  let logFilePath: string = "C:/Users/{username}/AppData/Local/VRChat/VRChat";
   let logFileName: string;
   let intervalId = 0;
-  let debugText = "";
+  // let debugText = "";
 
   // worldID用のリスト
   let worldID: string = "";
@@ -19,17 +25,19 @@
 
   // worldIDListに追加
   window.runtime.EventsOn("setWorldID", (id) => {
-    OutputLog("setWorldID:" + id);
     worldID = id;
-    // TODO: Svelteで配列にPushしたやつを反映させるやり方
+    logs = [
+      ...logs,
+      `${new Date().toLocaleTimeString()} POST HTTP REQUEST: ${worldID}`,
+    ];
   });
   window.runtime.EventsOn("setUserID", (id) => {
-    OutputLog("setUserID:" + id);
+    // OutputLog("setUserID:" + id);
     userID = id;
   });
 
   async function init() {
-    OutputLog("App.svelte: init()");
+    // OutputLog("App.svelte: init()");
     await LoadSetting().then((result) => (logFilePath = result));
     // json設定ファイルを読み込んで各コンポーネントに展開する
     if (intervalId != 0) {
@@ -63,94 +71,131 @@
     // 本当は↑に入れたいがなぜかログファイルが更新されないことがあるので
     await SetFileName(logFileName).then((result) => console.log(result));
   }
+
+  // content型の宣言
+  interface ContentModel {
+    id: number;
+    title: string;
+    target: string;
+    details: string;
+    type: string;
+    url: string;
+    trim1: string;
+    trim2: string;
+  }
+
+  let contents: ContentModel[] = [];
+  let selectedContent: ContentModel | null = null;
+  let logs: string[] = [];
+  let idCount = 0;
+
+  function addContent() {
+    idCount++;
+    const newContent = {
+      id: idCount,
+      title: `設定 ${idCount}`,
+      details: "",
+      type: "Web Request",
+      url: "",
+      trim1: "",
+      trim2: "",
+    };
+    contents = [...contents, newContent];
+    // 選択を更新
+    selectedContent = contents.find((content) => content.id === newContent.id);
+    logs = [
+      ...logs,
+      `${new Date().toLocaleTimeString()} addContent: ${newContent.id} ${newContent.title}`,
+    ];
+  }
+
+  function selectContent(customEvent: CustomEvent<ContentModel>) {
+    let selectContent = customEvent.detail;
+    logs = [
+      ...logs,
+      `${new Date().toLocaleTimeString()} selectContent: ${selectContent.id} ${selectContent.title}`,
+    ];
+    selectedContent = contents.find(
+      (content) => content.id === selectContent.id,
+    );
+  }
+
+  // CustomEvent<any>を使っているので、any型で受け取る
+  function updateContent(customEvent: CustomEvent<ContentModel>) {
+    // CustomEvent<any> を Content型に変換
+    let updateContent = customEvent.detail;
+    contents = contents.map((content) =>
+      content.id === content.id ? content : updateContent,
+    );
+    logs = [
+      ...logs,
+      `${new Date().toLocaleTimeString()} updateContent: ${updateContent.id} ${updateContent.title}`,
+    ];
+  }
+
+  function deleteContent(customEvent: CustomEvent<ContentModel>) {
+    let deleteContent = customEvent.detail;
+    contents = contents.filter((content) => content.id !== deleteContent.id);
+    if (contents.length > 0) {
+      selectedContent = contents[0];
+    } else {
+      selectedContent = null;
+    }
+    logs = [
+      ...logs,
+      `${new Date().toLocaleTimeString()} 削除しました: ${deleteContent.id} ${deleteContent.title}`,
+    ];
+  }
+
+  function logEvent(customEvent: CustomEvent<string>) {
+    let event = customEvent.detail;
+    logs = [...logs, event];
+  }
 </script>
 
 <main>
-  <br />
-  <!-- <h3>ログフォルダの場所を入力してください</h3> -->
-  <div class="input-box">
-    <button class="btn" on:click={getLogFolderPath}>
-      ログフォルダを指定
-    </button>
-    <div class="result">対象のフォルダ: {logFilePath}</div>
-    <div class="result">現在の監視対象: {logFileName}</div>
-  </div>
-  <br />
-  <p>あなたのユーザーID: {userID}</p>
-  <div class="result">
-    {#if worldID != ""}
-      Upload Visit Worlds ID
-      <p>{worldID}</p>
-    {/if}
+  <div class="container">
+    <Header filename={logFileName} on:getLogFolderPath={getLogFolderPath} />
+    <div class="main-content">
+      <Tabs
+        {contents}
+        on:selectContent={selectContent}
+        on:addContent={addContent}
+      />
+      {#if selectedContent}
+        <Content
+          bind:content={selectedContent}
+          on:updateContent={updateContent}
+          on:deleteContent={deleteContent}
+          on:logEvent={logEvent}
+        />
+      {/if}
+    </div>
+    <Footer {logs} />
   </div>
 </main>
 
 <style>
-  #random-photo {
-    width: 600px;
-    height: auto;
+  .container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
   }
-
-  #breed-photos {
-    width: 300px;
-    height: auto;
+  header {
+    flex-shrink: 0;
   }
-
-  .btn:focus {
-    border-width: 3px;
+  .main-content {
+    display: flex;
+    flex-grow: 1;
+    overflow: hidden;
   }
-
-  #logo {
-    display: block;
-    width: 50%;
-    height: 50%;
-    margin: auto;
-    padding: 10% 0 0;
-    background-position: center;
-    background-repeat: no-repeat;
-    background-size: 100% 100%;
-    background-origin: content-box;
+  .content {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 1rem;
   }
-
-  .result {
-    height: 20px;
-    line-height: 20px;
-    margin: 1.5rem auto;
-  }
-
-  .input-box .btn {
-    height: 30px;
-    line-height: 30px;
-    border-radius: 3px;
-    border: none;
-    margin: 0 0 0 20px;
-    padding: 0 8px;
-    cursor: pointer;
-  }
-
-  .input-box .btn:hover {
-    background-image: linear-gradient(to top, #cfd9df 0%, #e2ebf0 100%);
-    color: #333333;
-  }
-
-  .input-box .input {
-    border: none;
-    border-radius: 3px;
-    outline: none;
-    height: 30px;
-    line-height: 30px;
-    padding: 0 10px;
-    background-color: rgba(240, 240, 240, 1);
-    -webkit-font-smoothing: antialiased;
-  }
-
-  .input-box .input:hover {
-    border: none;
-    background-color: rgba(255, 255, 255, 1);
-  }
-
-  .input-box .input:focus {
-    border: none;
-    background-color: rgba(255, 255, 255, 1);
+  footer {
+    flex-shrink: 0;
+    text-align: left; /* フッターを左詰めに */
   }
 </style>
