@@ -43,13 +43,21 @@
         bind:value={content.details}
         on:change={(e) => handleInput(e, "details")}
     />
-    <label class="text" for="Target">イベント起動文字列</label>
+    <!-- <label class="text" for="Target">イベント起動文字列</label>
     <input
         id="Target"
         type="text"
         placeholder="Target"
         bind:value={content.target}
         on:change={(e) => handleInput(e, "target")}
+    /> -->
+    <label class="text" for="RegExp">正規表現抽出</label>
+    <input
+        id="RegExp"
+        type="text"
+        placeholder="RegExp"
+        bind:value={content.regexp}
+        on:change={(e) => handleInput(e, "regexp")}
     />
     <label class="text" for="Type">イベントタイプ</label>
     <select bind:value={content.type} on:change={(e) => handleInput(e, "type")}>
@@ -66,34 +74,7 @@
             on:change={(e) => handleInput(e, "url")}
         />
     {/if}
-    <div class="trim-fields">
-        <div class="field">
-            <label class="text" for="trim1-input">Trim 1</label>
-            <input
-                type="text"
-                id="trim1-input"
-                placeholder="Trim 1"
-                bind:value={content.trim1}
-                on:change={(e) => handleInput(e, "trim1")}
-            />
-            <!-- <input
-                type="text"
-                placeholder="Trim 1"
-                bind:value={content.trim1}
-                on:change={(e) => handleInput(e, "trim1")}
-            /> -->
-        </div>
-        <div class="field">
-            <label class="text" for="trim2-input">Trim 2</label>
-            <input
-                type="text"
-                id="trim2-input"
-                placeholder="Trim 2"
-                bind:value={content.trim2}
-                on:change={(e) => handleInput(e, "trim2")}
-            />
-        </div>
-    </div>
+
     <button on:click={deleteContent} class="delete-button">DELETE</button>
 </div>
 

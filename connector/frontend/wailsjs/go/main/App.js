@@ -6,6 +6,10 @@ export function GetNewestFileName(arg1) {
   return window['go']['main']['App']['GetNewestFileName'](arg1);
 }
 
+export function HttpPost(arg1, arg2, arg3) {
+  return window['go']['main']['App']['HttpPost'](arg1, arg2, arg3);
+}
+
 export function LoadSetting() {
   return window['go']['main']['App']['LoadSetting']();
 }
@@ -18,10 +22,6 @@ export function OutputLog(arg1) {
   return window['go']['main']['App']['OutputLog'](arg1);
 }
 
-export function PostWorldID(arg1) {
-  return window['go']['main']['App']['PostWorldID'](arg1);
-}
-
 export function ReadFile(arg1) {
   return window['go']['main']['App']['ReadFile'](arg1);
 }
@@ -32,6 +32,10 @@ export function ResetOffset() {
 
 export function SetFileName(arg1) {
   return window['go']['main']['App']['SetFileName'](arg1);
+}
+
+export function UpdateSetting(arg1) {
+  return window['go']['main']['App']['UpdateSetting'](arg1);
 }
 
 export function WatchFile() {

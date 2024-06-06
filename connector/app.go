@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,31 +19,41 @@ import (
 )
 
 // backend url
-var backendURL string = "https://backend.jmnt34deg.workers.dev"
+// var backendURL string = "https://backend.jmnt34deg.workers.dev"
 
 // var targetFileName string
 
 // App struct
 type App struct {
-	ctx              context.Context
-	userID           string
-	targetFolderPath string
-	targetFileName   string
+	ctx            context.Context
+	targetFileName string
+	SaveData       SaveData
 }
 
 type SaveData struct {
-	LogPath string `json:"path"`
+	LogPath  string    `json:"path"`
+	Settings []Setting `json:"settings"`
 }
 
-type WorldHistoriesResponse struct {
-	WorldHistories []WorldHistory
+type HttpRequestModel struct {
+	Value string `json:"value"`
+	Title string `json:"title"`
 }
 
-type WorldHistory struct {
-	WorldID string `json:"world_id"`
-	// WorldName      string `json:"world_name"`
-	// FirstVisitDate string `json:"created_at"`
-	// LastVisitDate  string `json:"updated_at"`
+type XSOverrayModel struct {
+}
+
+type LogOutputModel struct {
+}
+
+type Setting struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Details string `json:"details"`
+	Target  string `json:"target"`
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	RegExp  string `json:"regexp"`
 }
 
 func NewApp() *App {
@@ -62,27 +73,46 @@ func (a *App) SetFileName(fileName string) {
 	log.Default().Println("[DEBUG] [LOG] SetFileName:" + fileName)
 	a.targetFileName = fileName
 	// setIntervalごとにファイルの内容も確認
-	a.ReadFile(a.targetFolderPath + "\\" + a.targetFileName)
+	a.ReadFile(a.SaveData.LogPath + "\\" + a.targetFileName)
 }
 
-func (a *App) LoadSetting() string {
+func (a *App) LoadSetting() SaveData {
 	log.Default().Println("[DEBUG] [LOG] LoadSetting")
-	runtime.EventsEmit(a.ctx, "debug", "debug")
+	runtime.EventsEmit(a.ctx, "commonLogOutput", "LoadSetting")
 	// 設定ファイルの読み込み
 	file, err := os.ReadFile("setting.json")
 	if err != nil {
-		log.Default().Println("[DEBUG] [LOG] LoadSetting ERR")
-		return ""
+		runtime.EventsEmit(a.ctx, "commonLogOutput", "ERRPR:"+err.Error())
+		return SaveData{}
 	}
 	// JSONをStructに変換
 	var saveData SaveData
 	err = json.Unmarshal(file, &saveData)
 	if err != nil {
-		log.Fatal(err)
+		runtime.EventsEmit(a.ctx, "commonLogOutput", "ERRPR:"+err.Error())
 	}
-	log.Default().Println("[DEBUG] [LOG] LoadSetting Path:" + saveData.LogPath)
-	a.targetFolderPath = saveData.LogPath
-	return saveData.LogPath
+	log.Default().Println(saveData)
+	runtime.EventsEmit(a.ctx, "commonLogOutput", "Target Log:"+saveData.LogPath)
+	// a.SaveData.LogPath = saveData.LogPath
+	a.SaveData = saveData
+	return saveData
+}
+
+func (a *App) UpdateSetting(ss []Setting) {
+	log.Default().Println("[DEBUG] [LOG] UpdateSetting:", len(ss))
+	a.SaveData.Settings = ss
+	// StructをJSONに変換
+	jsonData, err := json.Marshal(a.SaveData)
+	if err != nil {
+		runtime.EventsEmit(a.ctx, "commonLogOutput", "ERRPR:"+err.Error())
+	}
+	runtime.EventsEmit(a.ctx, "commonLogOutput", string(jsonData))
+	// JSONをファイルに書き込む
+	err = os.WriteFile("setting.json", jsonData, 0644)
+	if err != nil {
+		runtime.EventsEmit(a.ctx, "commonLogOutput", "ERRPR:"+err.Error())
+	}
+	runtime.EventsEmit(a.ctx, "commonLogOutput", "Setting Updated Successfully")
 }
 
 func (a *App) OpenFolderSelectWindow() string {
@@ -93,13 +123,14 @@ func (a *App) OpenFolderSelectWindow() string {
 		Title: "Select LogFile Folder",
 	})
 	if err != nil {
-		log.Fatal(err)
+		runtime.EventsEmit(a.ctx, "commonLogOutput", "ERRPR:"+err.Error())
 	}
 	log.Default().Println("[DEBUG] [LOG] Target Path:" + path)
 	// JSONに保存
-	saveData := SaveData{LogPath: path}
+	// saveData := SaveData{LogPath: path}
+	a.SaveData.LogPath = path
 	// StructをJSONに変換
-	jsonData, err := json.Marshal(saveData)
+	jsonData, err := json.Marshal(a.SaveData)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -108,7 +139,7 @@ func (a *App) OpenFolderSelectWindow() string {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a.targetFolderPath = path
+	a.SaveData.LogPath = path
 	return path
 }
 
@@ -125,7 +156,7 @@ func (a *App) GetNewestFileName(path string) string {
 		if !entry.IsDir() {
 			info, err := entry.Info()
 			if err != nil {
-				log.Fatal(err)
+				runtime.EventsEmit(a.ctx, "commonLogOutput", "ERRPR:"+err.Error())
 			}
 			// 拡張子が.txtのファイルのみを対象とする
 			if filepath.Ext(entry.Name()) != ".txt" {
@@ -168,7 +199,7 @@ func (a *App) WatchFile() {
 				if !ok {
 					return
 				}
-				fullpath := a.targetFolderPath + "\\" + a.targetFileName
+				fullpath := a.SaveData.LogPath + "\\" + a.targetFileName
 				if event.Name == fullpath {
 					a.ReadFile(fullpath)
 				}
@@ -181,7 +212,7 @@ func (a *App) WatchFile() {
 		}
 	}()
 
-	err = watcher.Add(a.targetFolderPath)
+	err = watcher.Add(a.SaveData.LogPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -224,36 +255,82 @@ func (a *App) ReadFile(path string) {
 
 // 行の評価
 func (a *App) evaluateLine(line string) {
+	// a.SaveData.Settings をループさせる
+	for _, setting := range a.SaveData.Settings {
+		if setting.RegExp != "" {
+			pattern := regexp.MustCompile(setting.RegExp)
+			matches := pattern.FindString(line)
+			if matches != "" {
+				a.OutputLog(setting.Title + " : " + matches)
+				// setting.Type によって処理を分岐
+				if setting.Type == "Web Request" {
+					runtime.EventsEmit(a.ctx, "commonLogOutput", "Web Request:"+matches)
+					message := a.HttpPost(matches, setting.Title, setting.URL)
+					runtime.EventsEmit(a.ctx, "commonLogOutput", message)
+				} else if setting.Type == "xs" {
+					// a.XSOverray(matches)
+				} else if setting.Type == "log" {
+					// a.LogOutput(matches)
+				}
+			}
+		}
+	}
+
 	// ユーザIDを取得
-	substr := "User Authenticated: "
-	if strings.Contains(line, substr) {
-		// substr と aaa の間の文字列を抽出する
-		userID := strings.Split(strings.Split(line, "(")[1], ")")[0]
-		log.Default().Println(userID)
-		a.userID = userID
-		runtime.EventsEmit(a.ctx, "setUserID", userID)
-		return
-	}
+	// substr := "User Authenticated: "
+	// if strings.Contains(line, substr) {
+	// 	// substr と aaa の間の文字列を抽出する
+	// 	userID := strings.Split(strings.Split(line, "(")[1], ")")[0]
+	// 	log.Default().Println(userID)
+	// 	a.userID = userID
+	// 	runtime.EventsEmit(a.ctx, "setUserID", userID)
+	// 	return
+	// }
 	// 訪れたワールドを取得
-	substr = "[Behaviour] Joining "
-	if strings.Contains(line, substr+"wrld_") {
-		// substr と aaa の間の文字列を抽出する
-		worldID := strings.Split(strings.Split(line, substr)[1], ":")[0]
-		log.Default().Println(worldID)
-		runtime.EventsEmit(a.ctx, "setWorldID", worldID)
-		a.PostWorldID(worldID)
-		return
-	}
+	// substr = "[Behaviour] Joining "
+	// if strings.Contains(line, substr+"wrld_") {
+	// 	// substr と aaa の間の文字列を抽出する
+	// 	worldID := strings.Split(strings.Split(line, substr)[1], ":")[0]
+	// 	log.Default().Println(worldID)
+	// 	runtime.EventsEmit(a.ctx, "setWorldID", worldID)
+	// 	a.PostWorldID(worldID)
+	// 	return
+	// }
 	// 棋譜とかも、というか任意に取得したいよね
 }
 
-func (a *App) PostWorldID(worldID string) string {
-	// var data WorldHistory
-	URL := backendURL + "/u/" + a.userID + "/w/histories"
-	data := new(WorldHistory)
-	data.WorldID = worldID
+// func (a *App) PostWorldID(worldID string) string {
+// 	// var data WorldHistory
+// 	URL := backendURL + "/u/" + a.userID + "/w/histories"
+// 	data := new(WorldHistory)
+// 	data.WorldID = worldID
+// 	data_json, _ := json.Marshal(data)
+// 	res, err := http.Post(URL, "application/json", bytes.NewBuffer(data_json))
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	defer res.Body.Close()
+// 	body, err := io.ReadAll(res.Body)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	log.Default().Println(string(body))
+// 	return "OK"
+// }
+
+func (a *App) HttpPost(eventString string, title string, url string) string {
+	if url == "" {
+		return "URL is empty"
+	}
+	// url形式じゃない場合の処理
+	if !strings.HasPrefix(url, "http") {
+		return "URL is invalid"
+	}
+	data := new(HttpRequestModel)
+	data.Value = eventString
+	data.Title = title
 	data_json, _ := json.Marshal(data)
-	res, err := http.Post(URL, "application/json", bytes.NewBuffer(data_json))
+	res, err := http.Post(url, "application/json", bytes.NewBuffer(data_json))
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -5,7 +5,7 @@
   import { SetFileName } from "../wailsjs/go/main/App.js";
   import { WatchFile } from "../wailsjs/go/main/App.js";
   import { ResetOffset } from "../wailsjs/go/main/App.js";
-  import { OutputLog } from "../wailsjs/go/main/App.js";
+  import { UpdateSetting } from "../wailsjs/go/main/App.js";
   import { LoadSetting } from "../wailsjs/go/main/App.js";
 
   import { onMount } from "svelte";
@@ -14,55 +14,56 @@
   import Tabs from "./Tabs.svelte";
   import Footer from "./Footer.svelte";
 
-  let logFilePath: string = "C:/Users/{username}/AppData/Local/VRChat/VRChat";
-  let logFileName: string;
+  import { main } from "../wailsjs/go/models";
+
+  // let logFilePath: string = "";
+  let logFileName: string = "";
   let intervalId = 0;
-  // let debugText = "";
+  let saveData: main.SaveData;
 
-  // worldID用のリスト
-  let worldID: string = "";
-  let userID = "dummy";
+  let contents: main.Setting[] = [];
+  let selectedContent: main.Setting | null = null;
+  let logs: string[] = [];
+  let idCount = 0;
 
-  // worldIDListに追加
-  window.runtime.EventsOn("setWorldID", (id) => {
-    worldID = id;
+  window.runtime.EventsOn("commonLogOutput", (eventString) => {
     logs = [
       ...logs,
-      `${new Date().toLocaleTimeString()} POST HTTP REQUEST: ${worldID}`,
+      `${new Date().toLocaleTimeString()} NOTICE: ${eventString}`,
     ];
   });
-  window.runtime.EventsOn("setUserID", (id) => {
-    // OutputLog("setUserID:" + id);
-    userID = id;
+  window.runtime.EventsOn("pushHttpEvent", (eventString) => {
+    logs = [
+      ...logs,
+      `${new Date().toLocaleTimeString()} POST HTTP REQUEST: ${eventString}`,
+    ];
   });
 
+  init();
   async function init() {
-    // OutputLog("App.svelte: init()");
-    await LoadSetting().then((result) => (logFilePath = result));
-    // json設定ファイルを読み込んで各コンポーネントに展開する
+    await LoadSetting().then((result) => (saveData = result));
+    contents = saveData.settings;
     if (intervalId != 0) {
       clearInterval(intervalId);
     }
     await getLogFiles();
-    intervalId = setInterval(getLogFiles, 5 * 60 * 1000);
+    intervalId = setInterval(getLogFiles, 1 * 60 * 1000);
     WatchFile().then((result) => console.log(result));
   }
 
-  init();
-
   async function getLogFolderPath() {
-    await OpenFolderSelectWindow().then((result) => (logFilePath = result));
-    console.log(logFilePath);
+    await OpenFolderSelectWindow().then((result) => (saveData.path = result));
+    console.log(saveData.path);
     await getLogFiles();
   }
 
   async function getLogFiles() {
-    if (logFilePath == undefined || logFilePath == "") {
+    if (saveData.path == undefined || saveData.path == "") {
       return;
     }
     // ログフォルダ内のファイルを取得する
     const tempFileName = logFileName;
-    await GetNewestFileName(logFilePath).then(
+    await GetNewestFileName(saveData.path).then(
       (result) => (logFileName = result),
     );
     if (tempFileName != logFileName) {
@@ -72,33 +73,21 @@
     await SetFileName(logFileName).then((result) => console.log(result));
   }
 
-  // content型の宣言
-  interface ContentModel {
-    id: number;
-    title: string;
-    target: string;
-    details: string;
-    type: string;
-    url: string;
-    trim1: string;
-    trim2: string;
-  }
-
-  let contents: ContentModel[] = [];
-  let selectedContent: ContentModel | null = null;
-  let logs: string[] = [];
-  let idCount = 0;
-
-  function addContent() {
-    idCount++;
-    const newContent = {
-      id: idCount,
-      title: `設定 ${idCount}`,
+  async function addContent() {
+    // uuid作成
+    const uuid = () =>
+      Math.floor((1 + Math.random()) * 0x10000)
+        .toString(16)
+        .substring(1);
+    const newContent: main.Setting = {
+      id: uuid(),
+      title: `untitled ${idCount++}`,
+      target: "",
       details: "",
       type: "Web Request",
       url: "",
-      trim1: "",
-      trim2: "",
+      regexp: "",
+      // trim2: "",
     };
     contents = [...contents, newContent];
     // 選択を更新
@@ -107,9 +96,10 @@
       ...logs,
       `${new Date().toLocaleTimeString()} addContent: ${newContent.id} ${newContent.title}`,
     ];
+    await UpdateSetting(contents).then((result) => console.log(result));
   }
 
-  function selectContent(customEvent: CustomEvent<ContentModel>) {
+  function selectContent(customEvent: CustomEvent<main.Setting>) {
     let selectContent = customEvent.detail;
     logs = [
       ...logs,
@@ -121,19 +111,20 @@
   }
 
   // CustomEvent<any>を使っているので、any型で受け取る
-  function updateContent(customEvent: CustomEvent<ContentModel>) {
+  async function updateContent(customEvent: CustomEvent<main.Setting>) {
     // CustomEvent<any> を Content型に変換
     let updateContent = customEvent.detail;
     contents = contents.map((content) =>
-      content.id === content.id ? content : updateContent,
+      content.id === updateContent.id ? updateContent : content,
     );
     logs = [
       ...logs,
       `${new Date().toLocaleTimeString()} updateContent: ${updateContent.id} ${updateContent.title}`,
     ];
+    await UpdateSetting(contents).then((result) => console.log(result));
   }
 
-  function deleteContent(customEvent: CustomEvent<ContentModel>) {
+  async function deleteContent(customEvent: CustomEvent<main.Setting>) {
     let deleteContent = customEvent.detail;
     contents = contents.filter((content) => content.id !== deleteContent.id);
     if (contents.length > 0) {
@@ -145,6 +136,7 @@
       ...logs,
       `${new Date().toLocaleTimeString()} 削除しました: ${deleteContent.id} ${deleteContent.title}`,
     ];
+    await UpdateSetting(contents).then((result) => console.log(result));
   }
 
   function logEvent(customEvent: CustomEvent<string>) {
