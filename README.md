@@ -1,3 +1,8 @@
-# vrc_world_history_server
+```
+npm install
+npm run dev
+```
 
-VRC World + Wails(Svelte) + Hono
+```
+npm run deploy
+```

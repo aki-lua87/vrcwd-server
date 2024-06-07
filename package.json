@@ -1,0 +1,18 @@
+{
+  "scripts": {
+    "dev": "wrangler dev src/index.ts",
+    "deploy": "wrangler deploy --minify src/index.ts",
+    "db:gen": "drizzle-kit generate:sqlite",
+    "db:mig:local": "wrangler d1 migrations apply vrc-history-database --local",
+    "db:mig:remote": "wrangler d1 migrations apply vrc-history-database --env production"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.30.9",
+    "hono": "^4.2.9"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240403.0",
+    "drizzle-kit": "^0.20.17",
+    "wrangler": "^3.47.0"
+  }
+}
