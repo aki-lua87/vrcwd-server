@@ -13,7 +13,8 @@ POST {{url}}/u/{{user_id}}/w/histories HTTP/1.1
 content-type: application/json
 
 {
-    "world_id": "wrld-012-3433-11111"
+    "value": "wrld-012-3433-11111",
+    "tiele": "タイトル"
 }
 
 ### ユーザー情報一覧取得

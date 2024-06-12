@@ -8,6 +8,11 @@ type Bindings = {
   DB: D1Database;
 };
 
+interface VRCLogWatcher {
+  Value: string;
+  Title: string;
+}
+
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.get('/', (c) => {
@@ -30,13 +35,14 @@ app.get("/u/:user_id/w/histories", async (c) => {
  */
 app.post("/u/:user_id/w/histories", async (c) => {
   const id = c.req.param("user_id");
-  const params = await c.req.json<typeof world_histories.$inferSelect>()
+  const params = await c.req.json()
+  const wid = params.message;
   const db = drizzle(c.env.DB, { schema: { ...world_histories } });
   // UNIQUE条件で検索
   const exists = await db
     .select()
     .from(world_histories)
-    .where(and(eq(world_histories.world_id, params.world_id), eq(world_histories.registered_user_id, id)))
+    .where(and(eq(world_histories.world_id, wid), eq(world_histories.registered_user_id, id)))
     .execute()
   if (exists.length > 0) {
     const result = await db
@@ -46,13 +52,13 @@ app.post("/u/:user_id/w/histories", async (c) => {
           updated_at: sql`(cast (unixepoch () as int))`,
         }
       )
-      .where(and(eq(world_histories.world_id, params.world_id), eq(world_histories.registered_user_id, id)))
+      .where(and(eq(world_histories.world_id, wid), eq(world_histories.registered_user_id, id)))
       .execute()
   } else {
     const result = await db
       .insert(world_histories)
       .values({
-        world_id: params.world_id,
+        world_id: wid,
         registered_user_id: id,
       })
       .execute()
