@@ -24,7 +24,7 @@ app.get("/u/:user_id/w/histories", async (c) => {
   const result = await db
     .select()
     .from(world_histories)
-    .where(eq(world_histories.registered_user_id, id))
+    .where(and(eq(world_histories.registered_user_id, id), eq(world_histories.is_deleted, 0)))
     .orderBy(desc(world_histories.id))
     .all()
   return c.json(result);
