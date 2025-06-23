@@ -25,3 +25,7 @@ binding = "DB" # i.e. available in your Worker on env.DB
 database_name = "vrc-history-database"
 database_id = "687f8473-b6bd-47f9-bd74-ed82f79372a4"
 migrations_dir = "drizzle/migrations"
+
+# wrangler.toml (wrangler v3.88.0^)
+[observability.logs]
+enabled = true

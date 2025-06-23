@@ -75,11 +75,12 @@ async function fetchVRChatWorldInfo(worldId: string): Promise<{
   try {
     const response = await fetch(`https://vrchat.com/home/world/${worldId}/info`, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Client'
       }
     });
 
     if (!response.ok) {
+      console.error(`Failed to fetch world info for ${worldId}: ${response.status} ${response.statusText}`);
       return null;
     }
 
@@ -89,13 +90,21 @@ async function fetchVRChatWorldInfo(worldId: string): Promise<{
     const descriptionMatch = html.match(/<meta name="twitter:description" content="([^"]+)"/);
     const imageMatch = html.match(/<meta name="twitter:image"\s+content="([^"]+)"/);
 
-    if (!worldNameMatch || !descriptionMatch || !imageMatch) {
+    // どれか1つでもマッチする場合は次の処理へ、全てマッチしない場合はnullを返す
+    if (!worldNameMatch || !imageMatch) {
+      console.error("Failed to parse world information from HTML");
+      console.error("worldNameMatch:", worldNameMatch);
+      console.error("descriptionMatch:", descriptionMatch);
+      console.error("imageMatch:", imageMatch);
       return null;
     }
 
+    // descriptionMatchしない場合は空文字列を設定
+    const worldDescription = descriptionMatch ? descriptionMatch[1] : '';
+
     return {
       world_name: worldNameMatch[1],
-      world_description: descriptionMatch[1],
+      world_description: worldDescription,
       world_author_name: worldNameMatch[2],
       world_thumbnail_image_url: imageMatch[1]
     };
@@ -107,7 +116,7 @@ async function fetchVRChatWorldInfo(worldId: string): Promise<{
 app.post("/u/:user_id/w/tags", async (c) => {
   const userId = c.req.param("user_id");
   const params = await c.req.json();
-  const { world_id, tag_name } = params;
+  const { world_id, tag_name, created_at } = params;
 
   if (!world_id || !tag_name) {
     return c.json({ error: "world_id and tag_name are required" }, 400);
@@ -124,9 +133,9 @@ app.post("/u/:user_id/w/tags", async (c) => {
 
     if (worldExists.length === 0) {
       const worldInfo = await fetchVRChatWorldInfo(world_id);
-      
+
       if (!worldInfo) {
-        return c.json({ 
+        return c.json({
           error: "World not found or could not fetch world information",
           world_id: world_id
         }, 404);
@@ -167,17 +176,37 @@ app.post("/u/:user_id/w/tags", async (c) => {
         ))
         .execute();
     } else {
-      await db
-        .insert(user_world_tags)
-        .values({
-          user_id: userId,
-          world_id: world_id,
-          tag_name: tag_name
-        })
-        .execute();
+      if (created_at) {
+        let timestampValue;
+        if (typeof created_at === 'number') {
+          timestampValue = created_at;
+        } else if (typeof created_at === 'string') {
+          timestampValue = Math.floor(new Date(created_at).getTime() / 1000);
+        }
+
+        await db
+          .insert(user_world_tags)
+          .values({
+            user_id: userId,
+            world_id: world_id,
+            tag_name: tag_name,
+            created_at: sql`${timestampValue}`,
+            updated_at: sql`${timestampValue}`
+          })
+          .execute();
+      } else {
+        await db
+          .insert(user_world_tags)
+          .values({
+            user_id: userId,
+            world_id: world_id,
+            tag_name: tag_name
+          })
+          .execute();
+      }
     }
 
-    return c.json({ 
+    return c.json({
       message: "Tag registered successfully",
       user_id: userId,
       world_id: world_id,
