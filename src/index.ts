@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
-import { world_histories } from "./schema";
+import { world_histories, worlds_master, user_world_tags } from "./schema";
 import { and, eq, desc } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
@@ -64,6 +64,130 @@ app.post("/u/:user_id/w/histories", async (c) => {
       .execute()
   }
   return c.json({ message: "success" });
+})
+
+async function fetchVRChatWorldInfo(worldId: string): Promise<{
+  world_name: string;
+  world_description: string;
+  world_author_name: string;
+  world_thumbnail_image_url: string;
+} | null> {
+  try {
+    const response = await fetch(`https://vrchat.com/home/world/${worldId}/info`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const html = await response.text();
+
+    const worldNameMatch = html.match(/<meta name="twitter:title" content="([^"]+) by ([^"]+)"/);
+    const descriptionMatch = html.match(/<meta name="twitter:description" content="([^"]+)"/);
+    const imageMatch = html.match(/<meta name="twitter:image"\s+content="([^"]+)"/);
+
+    if (!worldNameMatch || !descriptionMatch || !imageMatch) {
+      return null;
+    }
+
+    return {
+      world_name: worldNameMatch[1],
+      world_description: descriptionMatch[1],
+      world_author_name: worldNameMatch[2],
+      world_thumbnail_image_url: imageMatch[1]
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+app.post("/u/:user_id/w/tags", async (c) => {
+  const userId = c.req.param("user_id");
+  const params = await c.req.json();
+  const { world_id, tag_name } = params;
+
+  if (!world_id || !tag_name) {
+    return c.json({ error: "world_id and tag_name are required" }, 400);
+  }
+
+  const db = drizzle(c.env.DB, { schema: { worlds_master, user_world_tags } });
+
+  try {
+    let worldExists = await db
+      .select()
+      .from(worlds_master)
+      .where(eq(worlds_master.world_id, world_id))
+      .execute();
+
+    if (worldExists.length === 0) {
+      const worldInfo = await fetchVRChatWorldInfo(world_id);
+      
+      if (!worldInfo) {
+        return c.json({ 
+          error: "World not found or could not fetch world information",
+          world_id: world_id
+        }, 404);
+      }
+
+      await db
+        .insert(worlds_master)
+        .values({
+          world_id: world_id,
+          world_name: worldInfo.world_name,
+          world_description: worldInfo.world_description,
+          world_author_name: worldInfo.world_author_name,
+          world_thumbnail_image_url: worldInfo.world_thumbnail_image_url
+        })
+        .execute();
+    }
+
+    const tagExists = await db
+      .select()
+      .from(user_world_tags)
+      .where(and(
+        eq(user_world_tags.user_id, userId),
+        eq(user_world_tags.world_id, world_id),
+        eq(user_world_tags.tag_name, tag_name)
+      ))
+      .execute();
+
+    if (tagExists.length > 0) {
+      await db
+        .update(user_world_tags)
+        .set({
+          updated_at: sql`(cast (unixepoch () as int))`
+        })
+        .where(and(
+          eq(user_world_tags.user_id, userId),
+          eq(user_world_tags.world_id, world_id),
+          eq(user_world_tags.tag_name, tag_name)
+        ))
+        .execute();
+    } else {
+      await db
+        .insert(user_world_tags)
+        .values({
+          user_id: userId,
+          world_id: world_id,
+          tag_name: tag_name
+        })
+        .execute();
+    }
+
+    return c.json({ 
+      message: "Tag registered successfully",
+      user_id: userId,
+      world_id: world_id,
+      tag_name: tag_name
+    });
+
+  } catch (error) {
+    console.error("Error processing tag registration:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
 })
 
 export default app
