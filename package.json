@@ -4,7 +4,8 @@
     "deploy": "wrangler deploy --minify src/index.ts",
     "db:gen": "drizzle-kit generate:sqlite",
     "db:mig:local": "wrangler d1 migrations apply vrc-history-database --local",
-    "db:mig:remote": "wrangler d1 migrations apply vrc-history-database --env production"
+    "db:mig:remote:apply": "wrangler d1 migrations apply vrc-history-database --remote",
+    "db:mig:remote:list": "wrangler d1 migrations list vrc-history-database"
   },
   "dependencies": {
     "drizzle-orm": "^0.30.9",
@@ -16,3 +17,5 @@
     "wrangler": "^3.47.0"
   }
 }
+
+

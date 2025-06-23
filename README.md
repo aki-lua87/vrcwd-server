@@ -1,8 +1,9 @@
 ```
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 ```
-npm run deploy
+pnpm drizzle-kit generate:sqlite
+pnpm run generate
 ```
