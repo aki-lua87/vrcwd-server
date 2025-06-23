@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
 import { world_histories, worlds_master, user_world_tags } from "./schema";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, or, inArray } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 type Bindings = {
@@ -215,6 +215,190 @@ app.post("/u/:user_id/w/tags", async (c) => {
 
   } catch (error) {
     console.error("Error processing tag registration:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+})
+
+app.get("/u/:user_id/w/tags", async (c) => {
+  const userId = c.req.param("user_id");
+  const tags = c.req.query("tags");
+  const mode = c.req.query("mode") || "or";
+  const offset = c.req.query("offset");
+  const pageSize = 20;
+  
+  const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
+  
+  try {
+    let baseQuery = db
+      .select({
+        world_id: user_world_tags.world_id,
+        world_name: worlds_master.world_name,
+        world_description: worlds_master.world_description,
+        world_author_name: worlds_master.world_author_name,
+        world_thumbnail_image_url: worlds_master.world_thumbnail_image_url,
+        tags: sql<string[]>`json_group_array(${user_world_tags.tag_name})`.as('tags'),
+        created_at: sql<number>`MIN(${user_world_tags.created_at})`.as('created_at'),
+        updated_at: sql<number>`MIN(${user_world_tags.updated_at})`.as('updated_at')
+      })
+      .from(user_world_tags)
+      .leftJoin(worlds_master, eq(user_world_tags.world_id, worlds_master.world_id))
+      .where(eq(user_world_tags.user_id, userId))
+      .groupBy(user_world_tags.world_id)
+      .orderBy(desc(sql`MIN(${user_world_tags.created_at})`));
+
+    if (tags) {
+      const tagArray = tags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
+      
+      if (tagArray.length > 0) {
+        if (mode === "and") {
+          const tagConditions = tagArray.map(tag => 
+            sql`EXISTS (
+              SELECT 1 FROM ${user_world_tags} uwt2 
+              WHERE uwt2.world_id = ${user_world_tags.world_id} 
+              AND uwt2.user_id = ${userId} 
+              AND uwt2.tag_name = ${tag}
+            )`
+          );
+          
+          baseQuery = db
+            .select({
+              world_id: user_world_tags.world_id,
+              world_name: worlds_master.world_name,
+              world_description: worlds_master.world_description,
+              world_author_name: worlds_master.world_author_name,
+              world_thumbnail_image_url: worlds_master.world_thumbnail_image_url,
+              tags: sql<string[]>`json_group_array(${user_world_tags.tag_name})`.as('tags'),
+              created_at: sql<number>`MIN(${user_world_tags.created_at})`.as('created_at'),
+              updated_at: sql<number>`MIN(${user_world_tags.updated_at})`.as('updated_at')
+            })
+            .from(user_world_tags)
+            .leftJoin(worlds_master, eq(user_world_tags.world_id, worlds_master.world_id))
+            .where(and(
+              eq(user_world_tags.user_id, userId),
+              ...tagConditions
+            ))
+            .groupBy(user_world_tags.world_id)
+            .orderBy(desc(sql`MIN(${user_world_tags.created_at})`));
+        } else {
+          baseQuery = db
+            .select({
+              world_id: user_world_tags.world_id,
+              world_name: worlds_master.world_name,
+              world_description: worlds_master.world_description,
+              world_author_name: worlds_master.world_author_name,
+              world_thumbnail_image_url: worlds_master.world_thumbnail_image_url,
+              tags: sql<string[]>`json_group_array(${user_world_tags.tag_name})`.as('tags'),
+              created_at: sql<number>`MIN(${user_world_tags.created_at})`.as('created_at'),
+              updated_at: sql<number>`MIN(${user_world_tags.updated_at})`.as('updated_at')
+            })
+            .from(user_world_tags)
+            .leftJoin(worlds_master, eq(user_world_tags.world_id, worlds_master.world_id))
+            .where(and(
+              eq(user_world_tags.user_id, userId),
+              inArray(user_world_tags.tag_name, tagArray)
+            ))
+            .groupBy(user_world_tags.world_id)
+            .orderBy(desc(sql`MIN(${user_world_tags.created_at})`));
+        }
+      }
+    }
+
+    if (offset === "all") {
+      // 全件取得の場合はlimitとoffsetを適用しない
+    } else {
+      const offsetNum = offset ? parseInt(offset, 10) : 0;
+      if (!isNaN(offsetNum) && offsetNum >= 0) {
+        baseQuery = (baseQuery as any).limit(pageSize).offset(offsetNum);
+      } else {
+        baseQuery = (baseQuery as any).limit(pageSize);
+      }
+    }
+
+    const result = await baseQuery.execute();
+    
+    const formattedResult = result.map(row => ({
+      ...row,
+      tags: typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags,
+      created_at: new Date(row.created_at * 1000).toISOString(),
+      updated_at: new Date(row.updated_at * 1000).toISOString()
+    }));
+
+    return c.json(formattedResult);
+  } catch (error) {
+    console.error("Error fetching user world tags:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+})
+
+app.get("/u/:user_id/w/tags/count", async (c) => {
+  const userId = c.req.param("user_id");
+  const tags = c.req.query("tags");
+  const mode = c.req.query("mode") || "or";
+  
+  const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
+  
+  try {
+    let countQuery;
+
+    if (tags) {
+      const tagArray = tags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
+      
+      if (tagArray.length > 0) {
+        if (mode === "and") {
+          countQuery = db
+            .select({
+              count: sql<number>`COUNT(DISTINCT world_id)`.as('count')
+            })
+            .from(sql`(
+              SELECT DISTINCT world_id
+              FROM ${user_world_tags}
+              WHERE user_id = ${userId}
+              GROUP BY world_id
+              HAVING ${sql.join(
+                tagArray.map(tag => 
+                  sql`SUM(CASE WHEN tag_name = ${tag} THEN 1 ELSE 0 END) > 0`
+                ),
+                sql` AND `
+              )}
+            ) as filtered_worlds`);
+        } else {
+          countQuery = db
+            .select({
+              count: sql<number>`COUNT(DISTINCT ${user_world_tags.world_id})`.as('count')
+            })
+            .from(user_world_tags)
+            .where(and(
+              eq(user_world_tags.user_id, userId),
+              inArray(user_world_tags.tag_name, tagArray)
+            ));
+        }
+      } else {
+        countQuery = db
+          .select({
+            count: sql<number>`COUNT(DISTINCT ${user_world_tags.world_id})`.as('count')
+          })
+          .from(user_world_tags)
+          .where(eq(user_world_tags.user_id, userId));
+      }
+    } else {
+      countQuery = db
+        .select({
+          count: sql<number>`COUNT(DISTINCT ${user_world_tags.world_id})`.as('count')
+        })
+        .from(user_world_tags)
+        .where(eq(user_world_tags.user_id, userId));
+    }
+
+    const result = await countQuery.execute();
+    const totalCount = result[0]?.count || 0;
+
+    return c.json({
+      total_count: totalCount,
+      page_size: 20,
+      total_pages: Math.ceil(totalCount / 20)
+    });
+  } catch (error) {
+    console.error("Error fetching user world tags count:", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 })
