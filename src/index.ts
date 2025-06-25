@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { drizzle } from "drizzle-orm/d1";
 import { world_histories, worlds_master, user_world_tags } from "./schema";
 import { and, eq, desc, or, inArray } from "drizzle-orm";
@@ -14,6 +15,12 @@ interface VRCLogWatcher {
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
+
+app.use("*", cors({
+  origin: "*",
+  allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowHeaders: ["Content-Type", "Authorization"],
+}))
 
 app.get('/', (c) => {
   return c.text('Hello Hono!')
@@ -326,6 +333,192 @@ app.get("/u/:user_id/w/tags", async (c) => {
     return c.json(formattedResult);
   } catch (error) {
     console.error("Error fetching user world tags:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+})
+
+app.get("/u/:user_id/w/worlds", async (c) => {
+  const userId = c.req.param("user_id");
+  const offset = c.req.query("offset");
+  const pageSize = 20;
+  
+  const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
+  
+  try {
+    let baseQuery = db
+      .select({
+        world_id: user_world_tags.world_id,
+        world_name: worlds_master.world_name,
+        world_description: worlds_master.world_description,
+        world_author_name: worlds_master.world_author_name,
+        world_thumbnail_image_url: worlds_master.world_thumbnail_image_url,
+        tags: sql<string[]>`json_group_array(CASE WHEN ${user_world_tags.tag_name} LIKE '__NO_TAG__%' THEN NULL ELSE ${user_world_tags.tag_name} END)`.as('tags'),
+        created_at: sql<number>`MIN(${user_world_tags.created_at})`.as('created_at'),
+        updated_at: sql<number>`MIN(${user_world_tags.updated_at})`.as('updated_at')
+      })
+      .from(user_world_tags)
+      .leftJoin(worlds_master, eq(user_world_tags.world_id, worlds_master.world_id))
+      .where(eq(user_world_tags.user_id, userId))
+      .groupBy(user_world_tags.world_id)
+      .orderBy(desc(sql`MIN(${user_world_tags.created_at})`));
+
+    if (offset === "all") {
+      // 全件取得の場合はlimitとoffsetを適用しない
+    } else {
+      const offsetNum = offset ? parseInt(offset, 10) : 0;
+      if (!isNaN(offsetNum) && offsetNum >= 0) {
+        baseQuery = (baseQuery as any).limit(pageSize).offset(offsetNum);
+      } else {
+        baseQuery = (baseQuery as any).limit(pageSize);
+      }
+    }
+
+    const result = await baseQuery.execute();
+    
+    const formattedResult = result.map(row => ({
+      ...row,
+      tags: typeof row.tags === 'string' ? JSON.parse(row.tags).filter((tag: string | null) => tag !== null) : (row.tags || []).filter((tag: string | null) => tag !== null),
+      created_at: new Date(row.created_at * 1000).toISOString(),
+      updated_at: new Date(row.updated_at * 1000).toISOString()
+    }));
+
+    return c.json(formattedResult);
+  } catch (error) {
+    console.error("Error fetching user worlds:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+})
+
+app.get("/u/:user_id/w/worlds/count", async (c) => {
+  const userId = c.req.param("user_id");
+  
+  const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
+  
+  try {
+    const countQuery = db
+      .select({
+        count: sql<number>`COUNT(DISTINCT ${user_world_tags.world_id})`.as('count')
+      })
+      .from(user_world_tags)
+      .where(eq(user_world_tags.user_id, userId));
+
+    const result = await countQuery.execute();
+    const totalCount = result[0]?.count || 0;
+
+    return c.json({
+      total_count: totalCount,
+      page_size: 20,
+      total_pages: Math.ceil(totalCount / 20)
+    });
+  } catch (error) {
+    console.error("Error fetching user worlds count:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+})
+
+app.post("/u/:user_id/w/worlds", async (c) => {
+  const userId = c.req.param("user_id");
+  const params = await c.req.json();
+  const { world_id, created_at } = params;
+
+  if (!world_id) {
+    return c.json({ error: "world_id is required" }, 400);
+  }
+
+  const db = drizzle(c.env.DB, { schema: { worlds_master, user_world_tags } });
+
+  try {
+    let worldExists = await db
+      .select()
+      .from(worlds_master)
+      .where(eq(worlds_master.world_id, world_id))
+      .execute();
+
+    if (worldExists.length === 0) {
+      const worldInfo = await fetchVRChatWorldInfo(world_id);
+
+      if (!worldInfo) {
+        return c.json({
+          error: "World not found or could not fetch world information",
+          world_id: world_id
+        }, 404);
+      }
+
+      await db
+        .insert(worlds_master)
+        .values({
+          world_id: world_id,
+          world_name: worldInfo.world_name,
+          world_description: worldInfo.world_description,
+          world_author_name: worldInfo.world_author_name,
+          world_thumbnail_image_url: worldInfo.world_thumbnail_image_url
+        })
+        .execute();
+    }
+
+    const dummyTag = `__NO_TAG__${world_id}__${userId}__`;
+    
+    const tagExists = await db
+      .select()
+      .from(user_world_tags)
+      .where(and(
+        eq(user_world_tags.user_id, userId),
+        eq(user_world_tags.world_id, world_id),
+        eq(user_world_tags.tag_name, dummyTag)
+      ))
+      .execute();
+
+    if (tagExists.length > 0) {
+      await db
+        .update(user_world_tags)
+        .set({
+          updated_at: sql`(cast (unixepoch () as int))`
+        })
+        .where(and(
+          eq(user_world_tags.user_id, userId),
+          eq(user_world_tags.world_id, world_id),
+          eq(user_world_tags.tag_name, dummyTag)
+        ))
+        .execute();
+    } else {
+      if (created_at) {
+        let timestampValue;
+        if (typeof created_at === 'number') {
+          timestampValue = created_at;
+        } else if (typeof created_at === 'string') {
+          timestampValue = Math.floor(new Date(created_at).getTime() / 1000);
+        }
+
+        await db
+          .insert(user_world_tags)
+          .values({
+            user_id: userId,
+            world_id: world_id,
+            tag_name: dummyTag,
+            created_at: sql`${timestampValue}`,
+            updated_at: sql`${timestampValue}`
+          })
+          .execute();
+      } else {
+        await db
+          .insert(user_world_tags)
+          .values({
+            user_id: userId,
+            world_id: world_id,
+            tag_name: dummyTag
+          })
+          .execute();
+      }
+    }
+
+    return c.json({
+      message: "World registered successfully",
+      user_id: userId,
+      world_id: world_id
+    });
+
+  } catch (error) {
+    console.error("Error processing world registration:", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 })
