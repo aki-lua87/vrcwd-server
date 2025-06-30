@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Cognito User Pool Stack
+
+Parameters:
+  StageName:
+    Type: String
+    Default: dev
+    Description: stage name
+  ProjectName:
+    Type: String
+    Default: wwms
+    Description: prefix
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${ProjectName}-${StageName}-user-pool
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      MfaConfiguration: "OFF" # MFAは無効
+      # メールアドレスでログイン
+      AliasAttributes:
+        - email
+      # メール設定
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      # 自動確認属性
+      AutoVerifiedAttributes:
+        - email
+      # 確認メッセージをリンク形式に変更
+      VerificationMessageTemplate:
+        EmailMessageByLink: "WWMS アカウントを有効化するには以下のリンクをクリックしてください: {##Click Here##}"
+        EmailSubjectByLink: "WWMS アカウント確認"
+        DefaultEmailOption: CONFIRM_WITH_LINK
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub ${ProjectName}-${StageName}-app-client
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+      RefreshTokenValidity: 1 # トークン有効期間（日）
+      AccessTokenValidity: 12 # アクセストークン有効期間（時間）
+      IdTokenValidity: 12 # IDトークン有効期間（時間）
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  # User Pool Domain (リンク形式確認メールに必要)
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub ${ProjectName}-${StageName}
+      UserPoolId: !Ref UserPool
+Outputs:
+  UserPoolId:
+    Description: The ID of the Cognito User Pool
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolId
+  UserPoolArn:
+    Description: The ARN of the Cognito User Pool
+    Value: !GetAtt UserPool.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolArn
+  UserPoolClientId:
+    Description: The ID of the Cognito User Pool Client
+    Value: !Ref UserPoolClient
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolClientId
