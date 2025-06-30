@@ -4,9 +4,14 @@ import { drizzle } from "drizzle-orm/d1";
 import { world_histories, worlds_master, user_world_tags } from "./schema";
 import { and, eq, desc, or, inArray } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+import { v2Routes } from "./v2/routes";
+import { cognitoAuth, getAuthenticatedUser } from "./auth";
 
 type Bindings = {
   DB: D1Database;
+  COGNITO_USER_POOL_ID?: string;
+  COGNITO_CLIENT_ID?: string;
+  AWS_REGION?: string;
 };
 
 interface VRCLogWatcher {
@@ -21,6 +26,8 @@ app.use("*", cors({
   allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowHeaders: ["Content-Type", "Authorization"],
 }))
+
+app.route("/v2", v2Routes)
 
 app.get('/', (c) => {
   return c.text('Hello Hono!')
@@ -593,6 +600,69 @@ app.get("/u/:user_id/w/tags/count", async (c) => {
   } catch (error) {
     console.error("Error fetching user world tags count:", error);
     return c.json({ error: "Internal server error" }, 500);
+  }
+})
+
+app.get("/auth/profile", cognitoAuth(), async (c) => {
+  const user = getAuthenticatedUser(c);
+  
+  return c.json({
+    message: "Profile retrieved successfully",
+    user: {
+      userId: user.userId,
+      email: user.email,
+      nickname: user.nickname
+    },
+    timestamp: new Date().toISOString()
+  });
+})
+
+app.get("/auth/protected-data", cognitoAuth(), async (c) => {
+  const user = getAuthenticatedUser(c);
+  const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
+  
+  try {
+    const userWorldCount = await db
+      .select({
+        count: sql<number>`COUNT(DISTINCT ${user_world_tags.world_id})`.as('count')
+      })
+      .from(user_world_tags)
+      .where(eq(user_world_tags.user_id, user.userId))
+      .execute();
+
+    const recentVisits = await db
+      .select({
+        world_id: user_world_tags.world_id,
+        world_name: worlds_master.world_name,
+        created_at: user_world_tags.created_at
+      })
+      .from(user_world_tags)
+      .leftJoin(worlds_master, eq(user_world_tags.world_id, worlds_master.world_id))
+      .where(eq(user_world_tags.user_id, user.userId))
+      .orderBy(desc(user_world_tags.created_at))
+      .limit(5)
+      .execute();
+
+    return c.json({
+      message: "Protected data retrieved successfully",
+      user: {
+        userId: user.userId,
+        email: user.email,
+        nickname: user.nickname
+      },
+      data: {
+        totalWorldsVisited: userWorldCount[0]?.count || 0,
+        recentVisits: recentVisits.map(visit => ({
+          worldId: visit.world_id,
+          worldName: visit.world_name || 'Unknown World',
+          visitedAt: visit.created_at ? new Date(visit.created_at * 1000).toISOString() : null
+        }))
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Error fetching protected data:", error);
+    return c.json({ error: "Failed to fetch protected data" }, 500);
   }
 })
 
