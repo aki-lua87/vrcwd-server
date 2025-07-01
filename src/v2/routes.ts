@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { drizzle } from "drizzle-orm/d1";
 import { worlds_master, user_folders, user_folder_items, api_keys } from "../schema";
 import { and, eq, sql } from "drizzle-orm";
@@ -66,14 +67,21 @@ function formatFolderId(folderId: number): string {
 
 const v2Routes = new Hono<{ Bindings: Bindings }>();
 
-// 認証ミドルウェアを全てのルートに適用（認証不要なエンドポイント以外）
-v2Routes.use("/folders/*", cognitoAuth());
-v2Routes.use("/auth/api-keys", cognitoAuth());
+// CORSミドルウェアを全てのルートに適用
+v2Routes.use("*", cors({
+  origin: "*",
+  allowHeaders: ["Content-Type", "Authorization"],
+  allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+}));
+
+// 認証不要なエンドポイントを除いて認証ミドルウェアを適用
+// 注意: 認証不要エンドポイントを先に定義してから認証ミドルウェアを適用する必要がある
 
 // 認証不要なエンドポイント: 
 // - POST /worlds (ワールド追加)
 // - GET /u/:user_id/folders/:folder_id/items (公開フォルダ閲覧)
 // - PUT /worlds/:world_id (ワールド情報更新)
+// - GET /folders/:folder_id/info (フォルダ情報取得)
 // - POST /u/:user_id/folders/:folder_id/items (APIキー認証)
 
 // 1. ワールド追加API (POST)
@@ -129,7 +137,7 @@ v2Routes.post("/worlds", async (c) => {
 });
 
 // 2. フォルダ一覧取得API (GET)
-v2Routes.get("/folders", async (c) => {
+v2Routes.get("/folders", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
@@ -159,7 +167,7 @@ v2Routes.get("/folders", async (c) => {
 });
 
 // 3. フォルダ作成API (POST)
-v2Routes.post("/folders", async (c) => {
+v2Routes.post("/folders", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const { folder_name, is_private, comment } = await c.req.json();
@@ -215,7 +223,7 @@ v2Routes.post("/folders", async (c) => {
 });
 
 // 4. フォルダ内アイテム追加API (POST)
-v2Routes.post("/folders/:folder_id/items", async (c) => {
+v2Routes.post("/folders/:folder_id/items", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
@@ -332,8 +340,8 @@ v2Routes.post("/folders/:folder_id/items", async (c) => {
 
   } catch (error) {
     console.error("Error adding item to folder:", {
-      error: error.message,
-      stack: error.stack,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
       user_id,
       folder_id,
       world_id,
@@ -342,13 +350,15 @@ v2Routes.post("/folders/:folder_id/items", async (c) => {
     });
     return c.json({ 
       error: "Internal server error",
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: undefined
     }, 500);
   }
 });
 
+// 認証は各エンドポイントで個別に設定
+
 // 5. フォルダ内アイテム取得API (GET)
-v2Routes.get("/folders/:folder_id/items", async (c) => {
+v2Routes.get("/folders/:folder_id/items", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
@@ -392,7 +402,7 @@ v2Routes.get("/folders/:folder_id/items", async (c) => {
 });
 
 // 6. フォルダ更新API (PUT)
-v2Routes.put("/folders/:folder_id", async (c) => {
+v2Routes.put("/folders/:folder_id", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
@@ -465,7 +475,7 @@ v2Routes.put("/folders/:folder_id", async (c) => {
 });
 
 // 7. フォルダ削除API (DELETE)
-v2Routes.delete("/folders/:folder_id", async (c) => {
+v2Routes.delete("/folders/:folder_id", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
@@ -520,7 +530,7 @@ v2Routes.delete("/folders/:folder_id", async (c) => {
 });
 
 // 8. フォルダ内アイテム更新API (PUT)
-v2Routes.put("/folders/:folder_id/items/:world_id", async (c) => {
+v2Routes.put("/folders/:folder_id/items/:world_id", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
@@ -580,7 +590,7 @@ v2Routes.put("/folders/:folder_id/items/:world_id", async (c) => {
 });
 
 // 9. フォルダ内アイテム削除API (DELETE)
-v2Routes.delete("/folders/:folder_id/items/:world_id", async (c) => {
+v2Routes.delete("/folders/:folder_id/items/:world_id", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
@@ -675,6 +685,71 @@ v2Routes.put("/worlds/:world_id", async (c) => {
 
   } catch (error) {
     console.error("Error updating world information:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// 11. 認証不要フォルダ情報取得API (GET)
+v2Routes.get("/folders/:folder_id/info", async (c) => {
+  const folder_id_param = c.req.param("folder_id");
+  const folder_id = parseFolderId(folder_id_param);
+  
+  if (folder_id === null) {
+    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+  }
+
+  const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items } });
+
+  try {
+    // フォルダ情報を取得
+    const folder = await db
+      .select({
+        id: user_folders.id,
+        user_id: user_folders.user_id,
+        folder_name: user_folders.folder_name,
+        is_private: user_folders.is_private,
+        comment: user_folders.comment,
+        created_at: user_folders.created_at,
+        updated_at: user_folders.updated_at
+      })
+      .from(user_folders)
+      .where(eq(user_folders.id, folder_id))
+      .execute();
+
+    if (folder.length === 0) {
+      return c.json({ error: "Folder not found" }, 404);
+    }
+
+    const folderInfo = folder[0];
+
+    // 非公開フォルダの場合は最小限の情報のみ返す
+    if (folderInfo.is_private === 1) {
+      return c.json({
+        folder_id: formatFolderId(folderInfo.id),
+        is_private: true
+      });
+    }
+
+    // 公開フォルダの場合は詳細情報とワールド数を取得
+    const worldCount = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(user_folder_items)
+      .where(eq(user_folder_items.folder_id, folder_id))
+      .execute();
+
+    return c.json({
+      folder_id: formatFolderId(folderInfo.id),
+      user_id: folderInfo.user_id,
+      folder_name: folderInfo.folder_name,
+      is_private: false,
+      comment: folderInfo.comment,
+      world_count: worldCount[0]?.count || 0,
+      created_at: folderInfo.created_at,
+      updated_at: folderInfo.updated_at
+    });
+
+  } catch (error) {
+    console.error("Error fetching folder info:", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
@@ -883,8 +958,8 @@ v2Routes.post("/u/:user_id/folders/:folder_id/items", async (c) => {
 
   } catch (error) {
     console.error("Error adding item to folder (API key auth):", {
-      error: error.message,
-      stack: error.stack,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
       user_id,
       folder_id,
       world_id,
@@ -893,13 +968,13 @@ v2Routes.post("/u/:user_id/folders/:folder_id/items", async (c) => {
     });
     return c.json({ 
       error: "Internal server error",
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: undefined
     }, 500);
   }
 });
 
 // 13. APIキー取得API (GET)
-v2Routes.get("/auth/api-keys", async (c) => {
+v2Routes.get("/auth/api-keys", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
@@ -941,7 +1016,7 @@ v2Routes.get("/auth/api-keys", async (c) => {
 });
 
 // 14. APIキー作成API (POST)
-v2Routes.post("/auth/api-keys", async (c) => {
+v2Routes.post("/auth/api-keys", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
@@ -985,7 +1060,7 @@ v2Routes.post("/auth/api-keys", async (c) => {
 });
 
 // 15. APIキー削除API (DELETE)
-v2Routes.delete("/auth/api-keys", async (c) => {
+v2Routes.delete("/auth/api-keys", cognitoAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 

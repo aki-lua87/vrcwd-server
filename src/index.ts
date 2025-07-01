@@ -32,6 +32,39 @@ app.route("/v2", v2Routes)
 app.get('/', (c) => {
   return c.text('Hello Hono!')
 })
+
+// ログテスト用エンドポイント
+app.get('/test-logs', (c) => {
+  console.log('[TEST] This is a console.log test');
+  console.error('[TEST] This is a console.error test');
+  console.warn('[TEST] This is a console.warn test');
+  console.info('[TEST] This is a console.info test');
+  
+  return c.json({
+    message: 'Log test completed',
+    timestamp: new Date().toISOString(),
+    logs: [
+      'console.log test',
+      'console.error test', 
+      'console.warn test',
+      'console.info test'
+    ]
+  });
+})
+
+// 認証テスト用エンドポイント
+app.get('/test-auth', cognitoAuth(), (c) => {
+  console.log('[TEST-AUTH] Authentication successful, handler reached');
+  const user = getAuthenticatedUser(c);
+  console.log('[TEST-AUTH] User info:', user);
+  
+  return c.json({
+    message: 'Authentication test successful',
+    user: user,
+    timestamp: new Date().toISOString()
+  });
+})
+
 app.get("/u/:user_id/w/histories", async (c) => {
   const id = c.req.param("user_id");
   const db = drizzle(c.env.DB, { schema: { ...world_histories } });
@@ -655,7 +688,7 @@ app.get("/auth/protected-data", cognitoAuth(), async (c) => {
         recentVisits: recentVisits.map(visit => ({
           worldId: visit.world_id,
           worldName: visit.world_name || 'Unknown World',
-          visitedAt: visit.created_at ? new Date(visit.created_at * 1000).toISOString() : null
+          visitedAt: visit.created_at && typeof visit.created_at === 'number' ? new Date(visit.created_at * 1000).toISOString() : null
         }))
       },
       timestamp: new Date().toISOString()
