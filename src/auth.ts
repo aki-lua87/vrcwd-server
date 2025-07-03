@@ -9,7 +9,10 @@ export interface JWTPayload {
   iss: string;
   exp: number;
   iat: number;
-  token_use: string;
+  firebase?: {
+    identities?: any;
+    sign_in_provider?: string;
+  };
 }
 
 export interface AuthenticatedContext {
@@ -20,54 +23,110 @@ export interface AuthenticatedContext {
   };
 }
 
-async function verifyJWT(token: string, userPoolId: string, region: string): Promise<JWTPayload> {
-  const jwksUrl = `https://cognito-idp.${region}.amazonaws.com/${userPoolId}/.well-known/jwks.json`;
+function base64urlToBuffer(base64url: string): ArrayBuffer {
+  const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64.padEnd(base64.length + (4 - base64.length % 4) % 4, '=');
+  const binary = atob(padded);
+  const buffer = new ArrayBuffer(binary.length);
+  const view = new Uint8Array(buffer);
+  for (let i = 0; i < binary.length; i++) {
+    view[i] = binary.charCodeAt(i);
+  }
+  return buffer;
+}
+
+function bufferToBase64url(buffer: ArrayBuffer): string {
+  const binary = Array.from(new Uint8Array(buffer))
+    .map(b => String.fromCharCode(b))
+    .join('');
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+}
+
+// JWKSキャッシュ
+interface JWKSCache {
+  keys: any[];
+  expiresAt: number;
+}
+
+const jwksCache = new Map<string, JWKSCache>();
+
+async function fetchJWKS(jwksUrl: string): Promise<any[]> {
+  const cached = jwksCache.get(jwksUrl);
   
-  console.log(`[JWT] Starting verification with JWKS URL: ${jwksUrl}`);
+  // キャッシュが有効な場合は使用
+  if (cached && Date.now() < cached.expiresAt) {
+    console.log('[JWT] Using cached JWKS');
+    return cached.keys;
+  }
+
+  console.log('[JWT] Fetching JWKS from server...');
+  const jwksResponse = await fetch(jwksUrl);
+  if (!jwksResponse.ok) {
+    throw new Error(`Failed to fetch JWKS: ${jwksResponse.status}`);
+  }
+
+  const jwks = await jwksResponse.json() as { keys: any[] };
+  
+  // キャッシュに保存（1時間有効）
+  const cacheExpiresAt = Date.now() + 60 * 60 * 1000; // 1時間
+  jwksCache.set(jwksUrl, {
+    keys: jwks.keys,
+    expiresAt: cacheExpiresAt
+  });
+
+  console.log(`[JWT] JWKS fetched and cached successfully. Keys count: ${jwks.keys.length}`);
+  return jwks.keys;
+}
+
+async function verifyFirebaseJWT(token: string, projectId: string): Promise<JWTPayload> {
+  const jwksUrl = `https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com`;
+  
+  console.log(`[JWT] Starting Firebase JWT verification with JWKS URL: ${jwksUrl}`);
   
   try {
-    const [header, payload] = token.split('.');
-    if (!header || !payload) {
-      console.error('[JWT] Invalid token format: missing header or payload');
+    const parts = token.split('.');
+    if (parts.length !== 3) {
       throw new Error('Invalid token format');
     }
 
-    console.log('[JWT] Token parts extracted successfully');
+    const [headerB64, payloadB64, signatureB64] = parts;
+    
+    const header = JSON.parse(new TextDecoder().decode(base64urlToBuffer(headerB64)));
+    const payload = JSON.parse(new TextDecoder().decode(base64urlToBuffer(payloadB64)));
+    
+    console.log(`[JWT] Token decoded - Issuer: ${payload.iss}, Audience: ${payload.aud}, Expiry: ${new Date(payload.exp * 1000).toISOString()}`);
 
-    const decodedHeader = JSON.parse(atob(header.replace(/-/g, '+').replace(/_/g, '/')));
-    const decodedPayload = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
-
-    console.log(`[JWT] Token decoded - Issuer: ${decodedPayload.iss}, Audience: ${decodedPayload.aud}, Expiry: ${new Date(decodedPayload.exp * 1000).toISOString()}, Token use: ${decodedPayload.token_use}`);
-
-    if (decodedPayload.exp * 1000 < Date.now()) {
-      console.error(`[JWT] Token expired: exp=${new Date(decodedPayload.exp * 1000).toISOString()}, now=${new Date().toISOString()}`);
+    // 期限チェック
+    if (payload.exp * 1000 < Date.now()) {
       throw new Error('Token expired');
     }
 
-    if (!decodedPayload.iss || !decodedPayload.iss.includes(userPoolId)) {
-      console.error(`[JWT] Invalid issuer: expected issuer containing '${userPoolId}', got '${decodedPayload.iss}'`);
-      throw new Error('Invalid issuer');
+    // 発行者チェック
+    const expectedIssuer = `https://securetoken.google.com/${projectId}`;
+    if (payload.iss !== expectedIssuer) {
+      throw new Error(`Invalid issuer: expected ${expectedIssuer}, got ${payload.iss}`);
     }
 
-    console.log('[JWT] Fetching JWKS...');
-    const jwksResponse = await fetch(jwksUrl);
-    if (!jwksResponse.ok) {
-      console.error(`[JWT] Failed to fetch JWKS: ${jwksResponse.status} ${jwksResponse.statusText}`);
-      throw new Error('Failed to fetch JWKS');
+    // オーディエンスチェック
+    if (payload.aud !== projectId) {
+      throw new Error(`Invalid audience: expected ${projectId}, got ${payload.aud}`);
     }
 
-    const jwks = await jwksResponse.json() as { keys: any[] };
-    console.log(`[JWT] JWKS fetched successfully. Keys count: ${jwks.keys.length}`);
-    
-    const key = jwks.keys.find((k: any) => k.kid === decodedHeader.kid);
-    
+    // JWKS取得（キャッシュ使用）
+    const keys = await fetchJWKS(jwksUrl);
+
+    // kid一致する鍵を探す
+    const key = keys.find((k: any) => k.kid === header.kid);
     if (!key) {
-      console.error(`[JWT] Key not found in JWKS: looking for kid='${decodedHeader.kid}', available kids: ${jwks.keys.map((k: any) => k.kid).join(', ')}`);
-      throw new Error('Key not found in JWKS');
+      throw new Error(`Key not found for kid: ${header.kid}`);
     }
-    
-    console.log(`[JWT] Matching key found for kid: ${decodedHeader.kid}`);
 
+    console.log(`[JWT] Matching key found for kid: ${header.kid}`);
+
+    // 公開鍵をインポート
     const publicKey = await crypto.subtle.importKey(
       'jwk',
       {
@@ -85,54 +144,49 @@ async function verifyJWT(token: string, userPoolId: string, region: string): Pro
       ['verify']
     );
 
-    const encoder = new TextEncoder();
-    const data = encoder.encode(`${header}.${payload}`);
-    const signatureBytes = Uint8Array.from(atob(token.split('.')[2].replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+    // 署名検証
+    const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+    const signature = base64urlToBuffer(signatureB64);
 
     console.log('[JWT] Verifying signature...');
     const isValid = await crypto.subtle.verify(
       'RSASSA-PKCS1-v1_5',
       publicKey,
-      signatureBytes,
+      signature,
       data
     );
 
     if (!isValid) {
-      console.error('[JWT] Invalid signature verification failed');
       throw new Error('Invalid signature');
     }
 
-    console.log('[JWT] Signature verification successful');
-    return decodedPayload as JWTPayload;
+    console.log('[JWT] Firebase JWT verified successfully');
+    return payload as JWTPayload;
   } catch (error) {
-    console.error('[JWT] JWT verification failed:', {
+    console.error('[JWT] Firebase JWT verification failed:', {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined
     });
-    throw new Error('Invalid token');
+    throw new Error('Invalid Firebase token');
   }
 }
 
-export const cognitoAuth = (options?: {
-  userPoolId?: string;
-  region?: string;
-  clientId?: string;
+export const firebaseAuth = (options?: {
+  projectId?: string;
 }): MiddlewareHandler => {
   return async (c, next) => {
     const requestPath = c.req.path;
     const requestMethod = c.req.method;
     
-    console.log(`[AUTH] ${requestMethod} ${requestPath} - Authentication check started`);
+    console.log(`[AUTH] ${requestMethod} ${requestPath} - Firebase authentication check started`);
     
-    const userPoolId = options?.userPoolId || c.env?.COGNITO_USER_POOL_ID;
-    const region = options?.region || c.env?.AWS_REGION || 'ap-northeast-1';
-    const clientId = options?.clientId || c.env?.COGNITO_CLIENT_ID;
+    const projectId = options?.projectId || c.env?.FIREBASE_PROJECT_ID;
 
-    console.log(`[AUTH] Configuration: userPoolId=${userPoolId ? 'SET' : 'NOT_SET'}, region=${region}, clientId=${clientId ? 'SET' : 'NOT_SET'}`);
+    console.log(`[AUTH] Configuration: projectId=${projectId ? 'SET' : 'NOT_SET'}`);
 
-    if (!userPoolId) {
-      console.error(`[AUTH] ${requestMethod} ${requestPath} - Cognito User Pool ID not configured`);
-      throw new HTTPException(500, { message: 'Cognito User Pool ID not configured' });
+    if (!projectId) {
+      console.error(`[AUTH] ${requestMethod} ${requestPath} - Firebase Project ID not configured`);
+      throw new HTTPException(500, { message: 'Firebase Project ID not configured' });
     }
 
     const authorization = c.req.header('Authorization');
@@ -152,20 +206,10 @@ export const cognitoAuth = (options?: {
     console.log(`[AUTH] ${requestMethod} ${requestPath} - Token extracted (length: ${token.length})`);
 
     try {
-      console.log(`[AUTH] ${requestMethod} ${requestPath} - Starting JWT verification`);
-      const payload = await verifyJWT(token, userPoolId, region);
+      console.log(`[AUTH] ${requestMethod} ${requestPath} - Starting Firebase JWT verification`);
+      const payload = await verifyFirebaseJWT(token, projectId);
       
-      console.log(`[AUTH] ${requestMethod} ${requestPath} - JWT verified successfully. User: ${payload.sub}, Audience: ${payload.aud}, Token use: ${payload.token_use}`);
-      
-      if (clientId && payload.aud !== clientId) {
-        console.error(`[AUTH] ${requestMethod} ${requestPath} - Invalid audience: expected ${clientId}, got ${payload.aud}`);
-        throw new HTTPException(401, { message: 'Invalid audience' });
-      }
-
-      if (payload.token_use !== 'id') {
-        console.error(`[AUTH] ${requestMethod} ${requestPath} - Invalid token use: expected 'id', got '${payload.token_use}'`);
-        throw new HTTPException(401, { message: 'Invalid token use' });
-      }
+      console.log(`[AUTH] ${requestMethod} ${requestPath} - Firebase JWT verified successfully. User: ${payload.sub}, Audience: ${payload.aud}`);
 
       c.set('user', {
         userId: payload.sub,
@@ -181,9 +225,7 @@ export const cognitoAuth = (options?: {
         stack: error instanceof Error ? error.stack : undefined,
         tokenLength: token.length,
         tokenPrefix: token.substring(0, 20) + '...',
-        userPoolId,
-        region,
-        clientId
+        projectId
       });
       
       if (error instanceof HTTPException) {

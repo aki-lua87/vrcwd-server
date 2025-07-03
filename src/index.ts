@@ -5,7 +5,7 @@ import { world_histories, worlds_master, user_world_tags } from "./schema";
 import { and, eq, desc, or, inArray } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { v2Routes } from "./v2/routes";
-import { cognitoAuth, getAuthenticatedUser } from "./auth";
+// import { cognitoAuth, getAuthenticatedUser } from "./auth";
 
 type Bindings = {
   DB: D1Database;
@@ -39,29 +39,16 @@ app.get('/test-logs', (c) => {
   console.error('[TEST] This is a console.error test');
   console.warn('[TEST] This is a console.warn test');
   console.info('[TEST] This is a console.info test');
-  
+
   return c.json({
     message: 'Log test completed',
     timestamp: new Date().toISOString(),
     logs: [
       'console.log test',
-      'console.error test', 
+      'console.error test',
       'console.warn test',
       'console.info test'
     ]
-  });
-})
-
-// 認証テスト用エンドポイント
-app.get('/test-auth', cognitoAuth(), (c) => {
-  console.log('[TEST-AUTH] Authentication successful, handler reached');
-  const user = getAuthenticatedUser(c);
-  console.log('[TEST-AUTH] User info:', user);
-  
-  return c.json({
-    message: 'Authentication test successful',
-    user: user,
-    timestamp: new Date().toISOString()
   });
 })
 
@@ -272,9 +259,9 @@ app.get("/u/:user_id/w/tags", async (c) => {
   const mode = c.req.query("mode") || "or";
   const offset = c.req.query("offset");
   const pageSize = 20;
-  
+
   const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
-  
+
   try {
     let baseQuery = db
       .select({
@@ -295,10 +282,10 @@ app.get("/u/:user_id/w/tags", async (c) => {
 
     if (tags) {
       const tagArray = tags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
-      
+
       if (tagArray.length > 0) {
         if (mode === "and") {
-          const tagConditions = tagArray.map(tag => 
+          const tagConditions = tagArray.map(tag =>
             sql`EXISTS (
               SELECT 1 FROM ${user_world_tags} uwt2 
               WHERE uwt2.world_id = ${user_world_tags.world_id} 
@@ -306,7 +293,7 @@ app.get("/u/:user_id/w/tags", async (c) => {
               AND uwt2.tag_name = ${tag}
             )`
           );
-          
+
           baseQuery = db
             .select({
               world_id: user_world_tags.world_id,
@@ -362,7 +349,7 @@ app.get("/u/:user_id/w/tags", async (c) => {
     }
 
     const result = await baseQuery.execute();
-    
+
     const formattedResult = result.map(row => ({
       ...row,
       tags: typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags,
@@ -381,9 +368,9 @@ app.get("/u/:user_id/w/worlds", async (c) => {
   const userId = c.req.param("user_id");
   const offset = c.req.query("offset");
   const pageSize = 20;
-  
+
   const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
-  
+
   try {
     let baseQuery = db
       .select({
@@ -414,7 +401,7 @@ app.get("/u/:user_id/w/worlds", async (c) => {
     }
 
     const result = await baseQuery.execute();
-    
+
     const formattedResult = result.map(row => ({
       ...row,
       tags: typeof row.tags === 'string' ? JSON.parse(row.tags).filter((tag: string | null) => tag !== null) : (row.tags || []).filter((tag: string | null) => tag !== null),
@@ -431,9 +418,9 @@ app.get("/u/:user_id/w/worlds", async (c) => {
 
 app.get("/u/:user_id/w/worlds/count", async (c) => {
   const userId = c.req.param("user_id");
-  
+
   const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
-  
+
   try {
     const countQuery = db
       .select({
@@ -497,7 +484,7 @@ app.post("/u/:user_id/w/worlds", async (c) => {
     }
 
     const dummyTag = `__NO_TAG__${world_id}__${userId}__`;
-    
+
     const tagExists = await db
       .select()
       .from(user_world_tags)
@@ -567,15 +554,15 @@ app.get("/u/:user_id/w/tags/count", async (c) => {
   const userId = c.req.param("user_id");
   const tags = c.req.query("tags");
   const mode = c.req.query("mode") || "or";
-  
+
   const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
-  
+
   try {
     let countQuery;
 
     if (tags) {
       const tagArray = tags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
-      
+
       if (tagArray.length > 0) {
         if (mode === "and") {
           countQuery = db
@@ -588,11 +575,11 @@ app.get("/u/:user_id/w/tags/count", async (c) => {
               WHERE user_id = ${userId}
               GROUP BY world_id
               HAVING ${sql.join(
-                tagArray.map(tag => 
-                  sql`SUM(CASE WHEN tag_name = ${tag} THEN 1 ELSE 0 END) > 0`
-                ),
-                sql` AND `
-              )}
+              tagArray.map(tag =>
+                sql`SUM(CASE WHEN tag_name = ${tag} THEN 1 ELSE 0 END) > 0`
+              ),
+              sql` AND `
+            )}
             ) as filtered_worlds`);
         } else {
           countQuery = db
@@ -633,69 +620,6 @@ app.get("/u/:user_id/w/tags/count", async (c) => {
   } catch (error) {
     console.error("Error fetching user world tags count:", error);
     return c.json({ error: "Internal server error" }, 500);
-  }
-})
-
-app.get("/auth/profile", cognitoAuth(), async (c) => {
-  const user = getAuthenticatedUser(c);
-  
-  return c.json({
-    message: "Profile retrieved successfully",
-    user: {
-      userId: user.userId,
-      email: user.email,
-      nickname: user.nickname
-    },
-    timestamp: new Date().toISOString()
-  });
-})
-
-app.get("/auth/protected-data", cognitoAuth(), async (c) => {
-  const user = getAuthenticatedUser(c);
-  const db = drizzle(c.env.DB, { schema: { user_world_tags, worlds_master } });
-  
-  try {
-    const userWorldCount = await db
-      .select({
-        count: sql<number>`COUNT(DISTINCT ${user_world_tags.world_id})`.as('count')
-      })
-      .from(user_world_tags)
-      .where(eq(user_world_tags.user_id, user.userId))
-      .execute();
-
-    const recentVisits = await db
-      .select({
-        world_id: user_world_tags.world_id,
-        world_name: worlds_master.world_name,
-        created_at: user_world_tags.created_at
-      })
-      .from(user_world_tags)
-      .leftJoin(worlds_master, eq(user_world_tags.world_id, worlds_master.world_id))
-      .where(eq(user_world_tags.user_id, user.userId))
-      .orderBy(desc(user_world_tags.created_at))
-      .limit(5)
-      .execute();
-
-    return c.json({
-      message: "Protected data retrieved successfully",
-      user: {
-        userId: user.userId,
-        email: user.email,
-        nickname: user.nickname
-      },
-      data: {
-        totalWorldsVisited: userWorldCount[0]?.count || 0,
-        recentVisits: recentVisits.map(visit => ({
-          worldId: visit.world_id,
-          worldName: visit.world_name || 'Unknown World',
-          visitedAt: visit.created_at && typeof visit.created_at === 'number' ? new Date(visit.created_at * 1000).toISOString() : null
-        }))
-      },
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error("Error fetching protected data:", error);
-    return c.json({ error: "Failed to fetch protected data" }, 500);
   }
 })
 

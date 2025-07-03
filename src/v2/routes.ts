@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import { drizzle } from "drizzle-orm/d1";
 import { worlds_master, user_folders, user_folder_items, api_keys } from "../schema";
 import { and, eq, sql } from "drizzle-orm";
-import { cognitoAuth, getAuthenticatedUser } from "../auth";
+import { firebaseAuth, getAuthenticatedUser } from "../auth";
 
 type Bindings = {
   DB: D1Database;
@@ -84,6 +84,19 @@ v2Routes.use("*", cors({
 // - GET /folders/:folder_id/info (フォルダ情報取得)
 // - POST /u/:user_id/folders/:folder_id/items (APIキー認証)
 
+// 認証テスト用エンドポイント
+v2Routes.get('/test-auth', (c) => {
+  console.log('[TEST-AUTH] Authentication successful, handler reached');
+  const user = getAuthenticatedUser(c);
+  console.log('[TEST-AUTH] User info:', user);
+
+  return c.json({
+    message: 'Authentication test successful',
+    user: user,
+    timestamp: new Date().toISOString()
+  });
+})
+
 // 1. ワールド追加API (POST)
 v2Routes.post("/worlds", async (c) => {
   const { world_id } = await c.req.json();
@@ -137,7 +150,7 @@ v2Routes.post("/worlds", async (c) => {
 });
 
 // 2. フォルダ一覧取得API (GET)
-v2Routes.get("/folders", cognitoAuth(), async (c) => {
+v2Routes.get("/folders", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
@@ -167,7 +180,7 @@ v2Routes.get("/folders", cognitoAuth(), async (c) => {
 });
 
 // 3. フォルダ作成API (POST)
-v2Routes.post("/folders", cognitoAuth(), async (c) => {
+v2Routes.post("/folders", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const { folder_name, is_private, comment } = await c.req.json();
@@ -223,12 +236,12 @@ v2Routes.post("/folders", cognitoAuth(), async (c) => {
 });
 
 // 4. フォルダ内アイテム追加API (POST)
-v2Routes.post("/folders/:folder_id/items", cognitoAuth(), async (c) => {
+v2Routes.post("/folders/:folder_id/items", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
-  
+
   if (folder_id === null) {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
@@ -348,7 +361,7 @@ v2Routes.post("/folders/:folder_id/items", cognitoAuth(), async (c) => {
       comment,
       addition_at
     });
-    return c.json({ 
+    return c.json({
       error: "Internal server error",
       details: undefined
     }, 500);
@@ -358,12 +371,12 @@ v2Routes.post("/folders/:folder_id/items", cognitoAuth(), async (c) => {
 // 認証は各エンドポイントで個別に設定
 
 // 5. フォルダ内アイテム取得API (GET)
-v2Routes.get("/folders/:folder_id/items", cognitoAuth(), async (c) => {
+v2Routes.get("/folders/:folder_id/items", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
-  
+
   if (folder_id === null) {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
@@ -402,12 +415,12 @@ v2Routes.get("/folders/:folder_id/items", cognitoAuth(), async (c) => {
 });
 
 // 6. フォルダ更新API (PUT)
-v2Routes.put("/folders/:folder_id", cognitoAuth(), async (c) => {
+v2Routes.put("/folders/:folder_id", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
-  
+
   if (folder_id === null) {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
@@ -475,12 +488,12 @@ v2Routes.put("/folders/:folder_id", cognitoAuth(), async (c) => {
 });
 
 // 7. フォルダ削除API (DELETE)
-v2Routes.delete("/folders/:folder_id", cognitoAuth(), async (c) => {
+v2Routes.delete("/folders/:folder_id", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
-  
+
   if (folder_id === null) {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
@@ -530,13 +543,13 @@ v2Routes.delete("/folders/:folder_id", cognitoAuth(), async (c) => {
 });
 
 // 8. フォルダ内アイテム更新API (PUT)
-v2Routes.put("/folders/:folder_id/items/:world_id", cognitoAuth(), async (c) => {
+v2Routes.put("/folders/:folder_id/items/:world_id", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
   const world_id = c.req.param("world_id");
-  
+
   if (folder_id === null) {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
@@ -590,13 +603,13 @@ v2Routes.put("/folders/:folder_id/items/:world_id", cognitoAuth(), async (c) => 
 });
 
 // 9. フォルダ内アイテム削除API (DELETE)
-v2Routes.delete("/folders/:folder_id/items/:world_id", cognitoAuth(), async (c) => {
+v2Routes.delete("/folders/:folder_id/items/:world_id", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
   const world_id = c.req.param("world_id");
-  
+
   if (folder_id === null) {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
@@ -693,7 +706,7 @@ v2Routes.put("/worlds/:world_id", async (c) => {
 v2Routes.get("/folders/:folder_id/info", async (c) => {
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
-  
+
   if (folder_id === null) {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
@@ -759,7 +772,7 @@ v2Routes.get("/u/:user_id/folders/:folder_id/items", async (c) => {
   const user_id = c.req.param("user_id");
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
-  
+
   if (folder_id === null) {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
@@ -824,7 +837,7 @@ v2Routes.post("/u/:user_id/folders/:folder_id/items", async (c) => {
   const folder_id = parseFolderId(folder_id_param);
   const api_key = c.req.query("api_key");
   const { world_id, comment, addition_at } = await c.req.json();
-  
+
   if (folder_id === null) {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
@@ -966,7 +979,7 @@ v2Routes.post("/u/:user_id/folders/:folder_id/items", async (c) => {
       comment,
       addition_at
     });
-    return c.json({ 
+    return c.json({
       error: "Internal server error",
       details: undefined
     }, 500);
@@ -974,7 +987,7 @@ v2Routes.post("/u/:user_id/folders/:folder_id/items", async (c) => {
 });
 
 // 13. APIキー取得API (GET)
-v2Routes.get("/auth/api-keys", cognitoAuth(), async (c) => {
+v2Routes.get("/auth/api-keys", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
@@ -995,7 +1008,7 @@ v2Routes.get("/auth/api-keys", cognitoAuth(), async (c) => {
       .execute();
 
     if (apiKeyRecord.length === 0) {
-      return c.json({ 
+      return c.json({
         message: "No active API key found for this user",
         has_api_key: false
       }, 404);
@@ -1016,7 +1029,7 @@ v2Routes.get("/auth/api-keys", cognitoAuth(), async (c) => {
 });
 
 // 14. APIキー作成API (POST)
-v2Routes.post("/auth/api-keys", cognitoAuth(), async (c) => {
+v2Routes.post("/auth/api-keys", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
@@ -1060,7 +1073,7 @@ v2Routes.post("/auth/api-keys", cognitoAuth(), async (c) => {
 });
 
 // 15. APIキー削除API (DELETE)
-v2Routes.delete("/auth/api-keys", cognitoAuth(), async (c) => {
+v2Routes.delete("/auth/api-keys", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 

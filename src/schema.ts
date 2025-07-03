@@ -22,16 +22,28 @@ export const users = sqliteTable(
     "users",
     {
         id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
-        user_id: text("user_id").notNull(), // vrc user id
-        uuid_user_id: text("uuid_user_id").notNull(), // uuid user id
+        user_id: text("user_id").notNull(), // firebaseのuid
         user_name: text("user_name"), // システムで追加する
         created_at: integer("created_at", { mode: 'timestamp' }).default(sql`(cast (unixepoch () as int))`),
         updated_at: integer("updated_at", { mode: 'timestamp' }).default(sql`(cast (unixepoch () as int))`),
     }, (table) => {
         return {
             user_id_index: unique("unique_users_user_id").on(table.user_id),
-            uuid_user_id_index: unique("unique_users_secret_user_id").on(table.uuid_user_id)
         }
+    }
+);
+
+// ユーザが他人のフォルダをお気に入りにできるようにするためのテーブル
+export const user_folder_favorites = sqliteTable(
+    "user_folder_favorites",
+    {
+        id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+        user_id: text("user_id").notNull(), // ユーザID
+        folder_id: integer("folder_id", { mode: "number" }).notNull(), // フォルダID
+        created_at: integer("created_at", { mode: 'timestamp' }).default(sql`(cast (unixepoch () as int))`),
+        updated_at: integer("updated_at", { mode: 'timestamp' }).default(sql`(cast (unixepoch () as int))`),
+    }, (table) => {
+        return { user_folder_favorites_index: unique("unique_user_folder_favorites").on(table.user_id, table.folder_id) }
     }
 );
 
