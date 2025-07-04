@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { drizzle } from "drizzle-orm/d1";
-import { worlds_master, user_folders, user_folder_items, api_keys } from "../schema";
+import { worlds_master, user_folders, user_folder_items, api_keys, users, user_folder_favorites } from "../schema";
 import { and, eq, sql } from "drizzle-orm";
 import { firebaseAuth, getAuthenticatedUser } from "../auth";
 
@@ -1111,6 +1111,200 @@ v2Routes.delete("/auth/api-keys", firebaseAuth(), async (c) => {
 
   } catch (error) {
     console.error("Error deleting API key:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// 16. ユーザープロフィール取得API (GET)
+v2Routes.get("/profile", firebaseAuth(), async (c) => {
+  const user = getAuthenticatedUser(c);
+  const user_id = user.userId;
+
+  const db = drizzle(c.env.DB, { schema: { users } });
+
+  try {
+    const userProfile = await db
+      .select({
+        user_id: users.user_id,
+        user_name: users.user_name
+      })
+      .from(users)
+      .where(eq(users.user_id, user_id))
+      .execute();
+
+    if (userProfile.length === 0) {
+      return c.json({ error: "User profile not found" }, 404);
+    }
+
+    return c.json(userProfile[0]);
+  } catch (error) {
+    console.error("Error fetching user profile:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// 17. ユーザープロフィール登録・更新API (POST)
+v2Routes.post("/profile", firebaseAuth(), async (c) => {
+  const user = getAuthenticatedUser(c);
+  const user_id = user.userId;
+  const { user_name } = await c.req.json();
+
+  if (!user_name) {
+    return c.json({ error: "user_name is required" }, 400);
+  }
+
+  const db = drizzle(c.env.DB, { schema: { users } });
+
+  try {
+    const existingUser = await db
+      .select()
+      .from(users)
+      .where(eq(users.user_id, user_id))
+      .execute();
+
+    if (existingUser.length > 0) {
+      await db
+        .update(users)
+        .set({
+          user_name: user_name,
+          updated_at: sql`(cast (unixepoch () as int))`
+        })
+        .where(eq(users.user_id, user_id))
+        .execute();
+    } else {
+      await db
+        .insert(users)
+        .values({
+          user_id: user_id,
+          user_name: user_name
+        })
+        .execute();
+    }
+
+    return c.json({
+      message: "Profile updated successfully",
+      user_id: user_id,
+      user_name: user_name
+    });
+  } catch (error) {
+    console.error("Error updating user profile:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// 18. フォルダお気に入り追加API (POST)
+v2Routes.post("/favorites", firebaseAuth(), async (c) => {
+  const user = getAuthenticatedUser(c);
+  const user_id = user.userId;
+  const { folder_id } = await c.req.json();
+
+  if (!folder_id) {
+    return c.json({ error: "folder_id is required" }, 400);
+  }
+
+  const db = drizzle(c.env.DB, { schema: { user_folder_favorites, user_folders } });
+
+  try {
+    // フォルダが存在するかチェック
+    const folder = await db
+      .select()
+      .from(user_folders)
+      .where(eq(user_folders.id, folder_id))
+      .execute();
+
+    if (folder.length === 0) {
+      return c.json({ error: "Folder not found" }, 404);
+    }
+
+    // 既にお気に入りに追加されているかチェック
+    const existingFavorite = await db
+      .select()
+      .from(user_folder_favorites)
+      .where(and(
+        eq(user_folder_favorites.user_id, user_id),
+        eq(user_folder_favorites.folder_id, folder_id)
+      ))
+      .execute();
+
+    if (existingFavorite.length > 0) {
+      return c.json({ error: "Already added to favorites" }, 400);
+    }
+
+    await db
+      .insert(user_folder_favorites)
+      .values({
+        user_id: user_id,
+        folder_id: folder_id
+      })
+      .execute();
+
+    return c.json({
+      message: "Folder added to favorites successfully",
+      user_id: user_id,
+      folder_id: folder_id
+    });
+  } catch (error) {
+    console.error("Error adding folder to favorites:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// 19. フォルダお気に入り削除API (DELETE)
+v2Routes.delete("/favorites/:folder_id", firebaseAuth(), async (c) => {
+  const user = getAuthenticatedUser(c);
+  const user_id = user.userId;
+  const folderId = parseInt(c.req.param("folder_id"), 10);
+
+  const db = drizzle(c.env.DB, { schema: { user_folder_favorites } });
+
+  try {
+    const result = await db
+      .delete(user_folder_favorites)
+      .where(and(
+        eq(user_folder_favorites.user_id, user_id),
+        eq(user_folder_favorites.folder_id, folderId)
+      ))
+      .execute();
+
+    return c.json({
+      message: "Folder removed from favorites successfully",
+      user_id: user_id,
+      folder_id: folderId
+    });
+  } catch (error) {
+    console.error("Error removing folder from favorites:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// 20. お気に入りフォルダ取得API (GET)
+v2Routes.get("/favorites", firebaseAuth(), async (c) => {
+  const user = getAuthenticatedUser(c);
+  const user_id = user.userId;
+  const db = drizzle(c.env.DB, { schema: { user_folder_favorites, user_folders, users } });
+
+  try {
+    const favorites = await db
+      .select({
+        folder_id: user_folders.id,
+        folder_name: user_folders.folder_name,
+        is_private: user_folders.is_private,
+        comment: user_folders.comment,
+        owner_user_id: user_folders.user_id,
+        owner_user_name: users.user_name
+      })
+      .from(user_folder_favorites)
+      .leftJoin(user_folders, eq(user_folder_favorites.folder_id, user_folders.id))
+      .leftJoin(users, eq(user_folders.user_id, users.user_id))
+      .where(eq(user_folder_favorites.user_id, user_id))
+      .execute();
+
+    // フォルダが存在しない場合は除外
+    const existingFavorites = favorites.filter(favorite => favorite.folder_id !== null);
+
+    return c.json(existingFavorites);
+  } catch (error) {
+    console.error("Error fetching favorite folders:", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
