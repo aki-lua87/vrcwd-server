@@ -711,14 +711,15 @@ v2Routes.get("/folders/:folder_id/info", async (c) => {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items } });
+  const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items, users } });
 
   try {
-    // フォルダ情報を取得
+    // フォルダ情報を取得（ユーザ名も含む）
     const folder = await db
       .select({
         id: user_folders.id,
         user_id: user_folders.user_id,
+        user_name: users.user_name,
         folder_name: user_folders.folder_name,
         is_private: user_folders.is_private,
         comment: user_folders.comment,
@@ -726,6 +727,7 @@ v2Routes.get("/folders/:folder_id/info", async (c) => {
         updated_at: user_folders.updated_at
       })
       .from(user_folders)
+      .leftJoin(users, eq(user_folders.user_id, users.user_id))
       .where(eq(user_folders.id, folder_id))
       .execute();
 
@@ -753,6 +755,7 @@ v2Routes.get("/folders/:folder_id/info", async (c) => {
     return c.json({
       folder_id: formatFolderId(folderInfo.id),
       user_id: folderInfo.user_id,
+      user_name: folderInfo.user_name,
       folder_name: folderInfo.folder_name,
       is_private: false,
       comment: folderInfo.comment,
