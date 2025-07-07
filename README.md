@@ -1,9 +1,1 @@
-```
-pnpm install
-pnpm run dev
-```
-
-```
-pnpm drizzle-kit generate:sqlite
-pnpm run generate
-```
+# ワールド管理用API v3
