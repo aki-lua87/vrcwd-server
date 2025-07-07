@@ -79,10 +79,10 @@ v2Routes.use("*", cors({
 
 // 認証不要なエンドポイント: 
 // - POST /worlds (ワールド追加)
-// - GET /u/:user_id/folders/:folder_id/items (公開フォルダ閲覧)
+// - GET /users/:user_id/folders/:folder_id/items (公開フォルダ閲覧)
 // - PUT /worlds/:world_id (ワールド情報更新)
 // - GET /folders/:folder_id/info (フォルダ情報取得)
-// - POST /u/:user_id/folders/:folder_id/items (APIキー認証)
+// - POST /users/:user_id/folders/:folder_id/items (APIキー認証)
 
 // 認証テスト用エンドポイント
 v2Routes.get('/test-auth', (c) => {
@@ -771,7 +771,7 @@ v2Routes.get("/folders/:folder_id/info", async (c) => {
 });
 
 // 11. フォルダの内容取得API(認証無し版)
-v2Routes.get("/u/:user_id/folders/:folder_id/items", async (c) => {
+v2Routes.get("/users/:user_id/folders/:folder_id/items", async (c) => {
   const user_id = c.req.param("user_id");
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
@@ -834,7 +834,7 @@ v2Routes.get("/u/:user_id/folders/:folder_id/items", async (c) => {
 });
 
 // 12. フォルダ内アイテム追加API(APIキー認証版)
-v2Routes.post("/u/:user_id/folders/:folder_id/items", async (c) => {
+v2Routes.post("/users/:user_id/folders/:folder_id/items", async (c) => {
   const user_id = c.req.param("user_id");
   const folder_id_param = c.req.param("folder_id");
   const folder_id = parseFolderId(folder_id_param);
@@ -1097,11 +1097,7 @@ v2Routes.delete("/auth/api-keys", firebaseAuth(), async (c) => {
     }
 
     await db
-      .update(api_keys)
-      .set({
-        is_active: 0,
-        updated_at: sql`(cast (unixepoch () as int))`
-      })
+      .delete(api_keys)
       .where(and(
         eq(api_keys.user_id, user_id),
         eq(api_keys.is_active, 1)
