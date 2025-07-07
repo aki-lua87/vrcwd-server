@@ -1,8 +1,8 @@
 name = "backend"
 compatibility_date = "2023-12-01"
 
-# [vars]
-# MY_VAR = "my-variable"
+[vars]
+FIREBASE_PROJECT_ID = "v4ds-f0a70"
 
 # [[kv_namespaces]]
 # binding = "MY_KV_NAMESPACE"
@@ -25,3 +25,7 @@ binding = "DB" # i.e. available in your Worker on env.DB
 database_name = "vrc-history-database"
 database_id = "687f8473-b6bd-47f9-bd74-ed82f79372a4"
 migrations_dir = "drizzle/migrations"
+
+# wrangler.toml (wrangler v3.88.0^)
+[observability.logs]
+enabled = true
