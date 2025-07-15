@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { drizzle } from "drizzle-orm/d1";
 import { worlds_master, user_folders, user_folder_items, api_keys, users, user_folder_favorites } from "../schema";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, asc, desc } from "drizzle-orm";
 import { firebaseAuth, getAuthenticatedUser } from "../auth";
 
 type Bindings = {
@@ -1304,6 +1304,112 @@ v2Routes.get("/favorites", firebaseAuth(), async (c) => {
     return c.json(existingFavorites);
   } catch (error) {
     console.error("Error fetching favorite folders:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// 21. WPPLS API - フォルダとワールド情報を特殊な形式で取得 (GET)
+v2Routes.get("/users/:user_id/items/wppls", async (c) => {
+  const user_id = c.req.param("user_id");
+  const sorttype = c.req.query("sorttype") || "name_asc"; // デフォルトはワールド名昇順
+
+  const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items, worlds_master, users } });
+
+  try {
+    // ユーザが存在するかチェック
+    const userExists = await db
+      .select()
+      .from(users)
+      .where(eq(users.user_id, user_id))
+      .execute();
+
+    if (userExists.length === 0) {
+      return c.json({ error: "User not found" }, 404);
+    }
+    // 公開フォルダとその中身を取得
+    const foldersWithItems = await db
+      .select({
+        folder_id: user_folders.id,
+        folder_name: user_folders.folder_name,
+        world_id: user_folder_items.world_id,
+        world_name: worlds_master.world_name,
+        world_description: worlds_master.world_description,
+        addition_at: user_folder_items.addition_at
+      })
+      .from(user_folders)
+      .leftJoin(user_folder_items, eq(user_folders.id, user_folder_items.folder_id))
+      .leftJoin(worlds_master, eq(user_folder_items.world_id, worlds_master.world_id))
+      .where(and(
+        eq(user_folders.user_id, user_id),
+        eq(user_folders.is_private, 0) // 公開フォルダのみ
+      ))
+      .execute();
+
+    // フォルダごとにワールドをグループ化
+    const folderMap = new Map<string, any>();
+
+    foldersWithItems.forEach(item => {
+      const folderName = item.folder_name;
+      
+      if (!folderMap.has(folderName)) {
+        folderMap.set(folderName, {
+          Category: folderName,
+          Worlds: []
+        });
+      }
+
+      // ワールド情報がある場合のみ追加
+      if (item.world_id && item.world_name) {
+        folderMap.get(folderName).Worlds.push({
+          ID: item.world_id,
+          Name: item.world_name,
+          Description: item.world_description || "",
+          addition_at: item.addition_at
+        });
+      }
+    });
+
+    // 各フォルダ内でワールドをソート
+    const getSortFunction = (sorttype: string) => {
+      switch (sorttype) {
+        case "name_desc":
+          return (a: any, b: any) => b.Name.localeCompare(a.Name);
+        case "addition_asc":
+          return (a: any, b: any) => {
+            const aTime = a.addition_at ? new Date(a.addition_at).getTime() : 0;
+            const bTime = b.addition_at ? new Date(b.addition_at).getTime() : 0;
+            return aTime - bTime;
+          };
+        case "addition_desc":
+          return (a: any, b: any) => {
+            const aTime = a.addition_at ? new Date(a.addition_at).getTime() : 0;
+            const bTime = b.addition_at ? new Date(b.addition_at).getTime() : 0;
+            return bTime - aTime;
+          };
+        case "name_asc":
+        default:
+          return (a: any, b: any) => a.Name.localeCompare(b.Name);
+      }
+    };
+
+    const sortFunction = getSortFunction(sorttype);
+
+    // ワールドをソートし、addition_atフィールドを削除
+    Array.from(folderMap.values()).forEach(folder => {
+      folder.Worlds.sort(sortFunction);
+      folder.Worlds.forEach((world: any) => {
+        delete world.addition_at;
+      });
+    });
+
+    const result = {
+      Categorys: Array.from(folderMap.values())
+    };
+
+    return c.json(result);
+
+  } catch (error) {
+    console.error("Error fetching WPPLS data:", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
