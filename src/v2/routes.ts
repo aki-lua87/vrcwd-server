@@ -1311,7 +1311,7 @@ v2Routes.get("/favorites", firebaseAuth(), async (c) => {
 // 21. WPPLS API - フォルダとワールド情報を特殊な形式で取得 (GET)
 v2Routes.get("/users/:user_id/items/wppls", async (c) => {
   const user_id = c.req.param("user_id");
-  const sorttype = c.req.query("sorttype") || "name_asc"; // デフォルトはワールド名昇順
+  const sorttype = c.req.query("sorttype") || "addition_desc"; // デフォルトはaddition_at降順
 
   const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items, worlds_master, users } });
 
