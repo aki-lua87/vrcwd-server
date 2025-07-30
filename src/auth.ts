@@ -55,21 +55,21 @@ const jwksCache = new Map<string, JWKSCache>();
 
 async function fetchJWKS(jwksUrl: string): Promise<any[]> {
   const cached = jwksCache.get(jwksUrl);
-  
+
   // キャッシュが有効な場合は使用
   if (cached && Date.now() < cached.expiresAt) {
     console.log('[JWT] Using cached JWKS');
     return cached.keys;
   }
 
-  console.log('[JWT] Fetching JWKS from server...');
+  // console.log('[JWT] Fetching JWKS from server...');
   const jwksResponse = await fetch(jwksUrl);
   if (!jwksResponse.ok) {
     throw new Error(`Failed to fetch JWKS: ${jwksResponse.status}`);
   }
 
   const jwks = await jwksResponse.json() as { keys: any[] };
-  
+
   // キャッシュに保存（1時間有効）
   const cacheExpiresAt = Date.now() + 60 * 60 * 1000; // 1時間
   jwksCache.set(jwksUrl, {
@@ -77,15 +77,15 @@ async function fetchJWKS(jwksUrl: string): Promise<any[]> {
     expiresAt: cacheExpiresAt
   });
 
-  console.log(`[JWT] JWKS fetched and cached successfully. Keys count: ${jwks.keys.length}`);
+  // console.log(`[JWT] JWKS fetched and cached successfully. Keys count: ${jwks.keys.length}`);
   return jwks.keys;
 }
 
 async function verifyFirebaseJWT(token: string, projectId: string): Promise<JWTPayload> {
   const jwksUrl = `https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com`;
-  
-  console.log(`[JWT] Starting Firebase JWT verification with JWKS URL: ${jwksUrl}`);
-  
+
+  // console.log(`[JWT] Starting Firebase JWT verification with JWKS URL: ${jwksUrl}`);
+
   try {
     const parts = token.split('.');
     if (parts.length !== 3) {
@@ -93,11 +93,11 @@ async function verifyFirebaseJWT(token: string, projectId: string): Promise<JWTP
     }
 
     const [headerB64, payloadB64, signatureB64] = parts;
-    
+
     const header = JSON.parse(new TextDecoder().decode(base64urlToBuffer(headerB64)));
     const payload = JSON.parse(new TextDecoder().decode(base64urlToBuffer(payloadB64)));
-    
-    console.log(`[JWT] Token decoded - Issuer: ${payload.iss}, Audience: ${payload.aud}, Expiry: ${new Date(payload.exp * 1000).toISOString()}`);
+
+    // console.log(`[JWT] Token decoded - Issuer: ${payload.iss}, Audience: ${payload.aud}, Expiry: ${new Date(payload.exp * 1000).toISOString()}`);
 
     // 期限チェック
     if (payload.exp * 1000 < Date.now()) {
@@ -124,7 +124,7 @@ async function verifyFirebaseJWT(token: string, projectId: string): Promise<JWTP
       throw new Error(`Key not found for kid: ${header.kid}`);
     }
 
-    console.log(`[JWT] Matching key found for kid: ${header.kid}`);
+    // console.log(`[JWT] Matching key found for kid: ${header.kid}`);
 
     // 公開鍵をインポート
     const publicKey = await crypto.subtle.importKey(
@@ -148,7 +148,7 @@ async function verifyFirebaseJWT(token: string, projectId: string): Promise<JWTP
     const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
     const signature = base64urlToBuffer(signatureB64);
 
-    console.log('[JWT] Verifying signature...');
+    // console.log('[JWT] Verifying signature...');
     const isValid = await crypto.subtle.verify(
       'RSASSA-PKCS1-v1_5',
       publicKey,
@@ -160,7 +160,7 @@ async function verifyFirebaseJWT(token: string, projectId: string): Promise<JWTP
       throw new Error('Invalid signature');
     }
 
-    console.log('[JWT] Firebase JWT verified successfully');
+    // console.log('[JWT] Firebase JWT verified successfully');
     return payload as JWTPayload;
   } catch (error) {
     console.error('[JWT] Firebase JWT verification failed:', {
@@ -177,12 +177,12 @@ export const firebaseAuth = (options?: {
   return async (c, next) => {
     const requestPath = c.req.path;
     const requestMethod = c.req.method;
-    
-    console.log(`[AUTH] ${requestMethod} ${requestPath} - Firebase authentication check started`);
-    
+
+    // console.log(`[AUTH] ${requestMethod} ${requestPath} - Firebase authentication check started`);
+
     const projectId = options?.projectId || c.env?.FIREBASE_PROJECT_ID;
 
-    console.log(`[AUTH] Configuration: projectId=${projectId ? 'SET' : 'NOT_SET'}`);
+    // console.log(`[AUTH] Configuration: projectId=${projectId ? 'SET' : 'NOT_SET'}`);
 
     if (!projectId) {
       console.error(`[AUTH] ${requestMethod} ${requestPath} - Firebase Project ID not configured`);
@@ -190,8 +190,8 @@ export const firebaseAuth = (options?: {
     }
 
     const authorization = c.req.header('Authorization');
-    console.log(`[AUTH] ${requestMethod} ${requestPath} - Authorization header: ${authorization ? 'PRESENT' : 'MISSING'}`);
-    
+    // console.log(`[AUTH] ${requestMethod} ${requestPath} - Authorization header: ${authorization ? 'PRESENT' : 'MISSING'}`);
+
     if (!authorization) {
       console.error(`[AUTH] ${requestMethod} ${requestPath} - No Authorization header`);
       throw new HTTPException(401, { message: 'Authorization header required' });
@@ -202,14 +202,14 @@ export const firebaseAuth = (options?: {
       console.error(`[AUTH] ${requestMethod} ${requestPath} - No Bearer token found. Authorization header: ${authorization}`);
       throw new HTTPException(401, { message: 'Bearer token required' });
     }
-    
-    console.log(`[AUTH] ${requestMethod} ${requestPath} - Token extracted (length: ${token.length})`);
+
+    // console.log(`[AUTH] ${requestMethod} ${requestPath} - Token extracted (length: ${token.length})`);
 
     try {
-      console.log(`[AUTH] ${requestMethod} ${requestPath} - Starting Firebase JWT verification`);
+      // console.log(`[AUTH] ${requestMethod} ${requestPath} - Starting Firebase JWT verification`);
       const payload = await verifyFirebaseJWT(token, projectId);
-      
-      console.log(`[AUTH] ${requestMethod} ${requestPath} - Firebase JWT verified successfully. User: ${payload.sub}, Audience: ${payload.aud}`);
+
+      // console.log(`[AUTH] ${requestMethod} ${requestPath} - Firebase JWT verified successfully. User: ${payload.sub}, Audience: ${payload.aud}`);
 
       c.set('user', {
         userId: payload.sub,
@@ -217,7 +217,7 @@ export const firebaseAuth = (options?: {
         nickname: payload.nickname,
       });
 
-      console.log(`[AUTH] ${requestMethod} ${requestPath} - Authentication successful for user: ${payload.sub}`);
+      // console.log(`[AUTH] ${requestMethod} ${requestPath} - Authentication successful for user: ${payload.sub}`);
       await next();
     } catch (error) {
       console.error(`[AUTH] ${requestMethod} ${requestPath} - Authentication failed:`, {
@@ -227,11 +227,11 @@ export const firebaseAuth = (options?: {
         tokenPrefix: token.substring(0, 20) + '...',
         projectId
       });
-      
+
       if (error instanceof HTTPException) {
         throw error;
       }
-      
+
       throw new HTTPException(401, { message: 'Invalid or expired token' });
     }
   };

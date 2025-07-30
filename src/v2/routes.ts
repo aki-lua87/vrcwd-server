@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/d1";
 import { worlds_master, user_folders, user_folder_items, api_keys, users, user_folder_favorites } from "../schema";
 import { and, eq, sql, asc, desc } from "drizzle-orm";
 import { firebaseAuth, getAuthenticatedUser } from "../auth";
+import { createDbWithRetry, withRetry } from "../db-utils";
 
 type Bindings = {
   DB: D1Database;
@@ -48,6 +49,73 @@ async function fetchVRChatWorldInfo(worldId: string): Promise<{
     };
   } catch (error) {
     return null;
+  }
+}
+
+// ワールド情報が30日以上古いかチェックし、必要に応じて更新する関数
+async function ensureWorldInfoUpdated(db: any, world_id: string): Promise<void> {
+  try {
+    const THIRTY_DAYS_IN_SECONDS = 30 * 24 * 60 * 60; // 30日を秒で表現
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+
+    const existingWorld = await db
+      .select()
+      .from(worlds_master)
+      .where(eq(worlds_master.world_id, world_id))
+      .execute();
+
+    if (existingWorld.length > 0) {
+      const world = existingWorld[0];
+      const updatedAt = world.updated_at || world.created_at; // updated_atがnullの場合はcreated_atを使用
+      
+      // 30日以上古い場合のみ更新
+      if (currentTimestamp - updatedAt >= THIRTY_DAYS_IN_SECONDS) {
+        console.log(`World ${world_id} is older than 30 days, attempting to update...`);
+        
+        const worldInfo = await fetchVRChatWorldInfo(world_id);
+        
+        if (worldInfo) {
+          await db
+            .update(worlds_master)
+            .set({
+              world_name: worldInfo.world_name,
+              world_description: worldInfo.world_description,
+              world_author_name: worldInfo.world_author_name,
+              world_thumbnail_image_url: worldInfo.world_thumbnail_image_url,
+              updated_at: sql`(cast (unixepoch () as int))`
+            })
+            .where(eq(worlds_master.world_id, world_id))
+            .execute();
+          
+          console.log(`Successfully updated world info for ${world_id}`);
+        } else {
+          console.warn(`Failed to fetch updated world info for ${world_id}, skipping update`);
+        }
+      }
+    } else {
+      // ワールドが存在しない場合は新規作成
+      const worldInfo = await fetchVRChatWorldInfo(world_id);
+      
+      if (worldInfo) {
+        await db
+          .insert(worlds_master)
+          .values({
+            world_id: world_id,
+            world_name: worldInfo.world_name,
+            world_description: worldInfo.world_description,
+            world_author_name: worldInfo.world_author_name,
+            world_thumbnail_image_url: worldInfo.world_thumbnail_image_url
+          })
+          .execute();
+        
+        console.log(`Successfully created new world info for ${world_id}`);
+      } else {
+        throw new Error(`Could not fetch world information for ${world_id}`);
+      }
+    }
+  } catch (error) {
+    console.error(`Error in ensureWorldInfoUpdated for ${world_id}:`, error);
+    throw error;
   }
 }
 
@@ -105,7 +173,7 @@ v2Routes.post("/worlds", async (c) => {
     return c.json({ error: "world_id is required" }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { worlds_master } });
+  const db = createDbWithRetry(c.env.DB, { worlds_master });
 
   try {
     const existingWorld = await db
@@ -115,28 +183,16 @@ v2Routes.post("/worlds", async (c) => {
       .execute();
 
     if (existingWorld.length > 0) {
-      return c.json({ error: "World already exists" }, 409);
+      // 既存のワールドがある場合、30日以上古いかチェックして更新
+      await ensureWorldInfoUpdated(db, world_id);
+      return c.json({ 
+        message: "World already exists and has been updated if necessary",
+        world_id: world_id 
+      }, 200);
     }
 
-    const worldInfo = await fetchVRChatWorldInfo(world_id);
-
-    if (!worldInfo) {
-      return c.json({
-        error: "World not found or could not fetch world information",
-        world_id: world_id
-      }, 404);
-    }
-
-    await db
-      .insert(worlds_master)
-      .values({
-        world_id: world_id,
-        world_name: worldInfo.world_name,
-        world_description: worldInfo.world_description,
-        world_author_name: worldInfo.world_author_name,
-        world_thumbnail_image_url: worldInfo.world_thumbnail_image_url
-      })
-      .execute();
+    // 新しいワールドの場合
+    await ensureWorldInfoUpdated(db, world_id);
 
     return c.json({
       message: "World added successfully",
@@ -154,7 +210,7 @@ v2Routes.get("/folders", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
-  const db = drizzle(c.env.DB, { schema: { user_folders } });
+  const db = createDbWithRetry(c.env.DB, { user_folders });
 
   try {
     const folders = await db
@@ -189,7 +245,7 @@ v2Routes.post("/folders", firebaseAuth(), async (c) => {
     return c.json({ error: "folder_name is required" }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { user_folders } });
+  const db = createDbWithRetry(c.env.DB, { user_folders });
 
   try {
     const existingFolder = await db
@@ -256,7 +312,7 @@ v2Routes.post("/folders/:folder_id/items", firebaseAuth(), async (c) => {
     return c.json({ error: "addition_at must be a positive number (Unix timestamp)" }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items, worlds_master } });
+  const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items, worlds_master });
 
   try {
     const folderExists = await db
@@ -292,32 +348,14 @@ v2Routes.post("/folders/:folder_id/items", firebaseAuth(), async (c) => {
       }, 200);
     }
 
-    const worldExists = await db
-      .select()
-      .from(worlds_master)
-      .where(eq(worlds_master.world_id, world_id))
-      .execute();
-
-    if (worldExists.length === 0) {
-      const worldInfo = await fetchVRChatWorldInfo(world_id);
-
-      if (!worldInfo) {
-        return c.json({
-          error: "World not found or could not fetch world information",
-          world_id: world_id
-        }, 404);
-      }
-
-      await db
-        .insert(worlds_master)
-        .values({
-          world_id: world_id,
-          world_name: worldInfo.world_name,
-          world_description: worldInfo.world_description,
-          world_author_name: worldInfo.world_author_name,
-          world_thumbnail_image_url: worldInfo.world_thumbnail_image_url
-        })
-        .execute();
+    // ワールド情報の存在確認と必要に応じた更新
+    try {
+      await ensureWorldInfoUpdated(db, world_id);
+    } catch (error) {
+      return c.json({
+        error: "World not found or could not fetch world information",
+        world_id: world_id
+      }, 404);
     }
 
     const insertValues: any = {
@@ -381,7 +419,7 @@ v2Routes.get("/folders/:folder_id/items", firebaseAuth(), async (c) => {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { user_folder_items, worlds_master } });
+  const db = createDbWithRetry(c.env.DB, { user_folder_items, worlds_master });
 
   try {
     const items = await db
@@ -426,7 +464,7 @@ v2Routes.put("/folders/:folder_id", firebaseAuth(), async (c) => {
   }
   const { folder_name, is_private, comment } = await c.req.json();
 
-  const db = drizzle(c.env.DB, { schema: { user_folders } });
+  const db = createDbWithRetry(c.env.DB, { user_folders });
 
   try {
     const existingFolder = await db
@@ -498,7 +536,7 @@ v2Routes.delete("/folders/:folder_id", firebaseAuth(), async (c) => {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items } });
+  const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items });
 
   try {
     const folderExists = await db
@@ -555,7 +593,7 @@ v2Routes.put("/folders/:folder_id/items/:world_id", firebaseAuth(), async (c) =>
   }
   const { comment } = await c.req.json();
 
-  const db = drizzle(c.env.DB, { schema: { user_folder_items } });
+  const db = createDbWithRetry(c.env.DB, { user_folder_items });
 
   try {
     const existingItem = await db
@@ -614,7 +652,7 @@ v2Routes.delete("/folders/:folder_id/items/:world_id", firebaseAuth(), async (c)
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { user_folder_items } });
+  const db = createDbWithRetry(c.env.DB, { user_folder_items });
 
   try {
     const itemExists = await db
@@ -657,7 +695,7 @@ v2Routes.delete("/folders/:folder_id/items/:world_id", firebaseAuth(), async (c)
 v2Routes.put("/worlds/:world_id", async (c) => {
   const world_id = c.req.param("world_id");
 
-  const db = drizzle(c.env.DB, { schema: { worlds_master } });
+  const db = createDbWithRetry(c.env.DB, { worlds_master });
 
   try {
     const existingWorld = await db
@@ -711,7 +749,7 @@ v2Routes.get("/folders/:folder_id/info", async (c) => {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items, users } });
+  const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items, users });
 
   try {
     // フォルダ情報を取得（ユーザ名も含む）
@@ -780,7 +818,7 @@ v2Routes.get("/users/:user_id/folders/:folder_id/items", async (c) => {
     return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items, worlds_master } });
+  const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items, worlds_master });
 
   try {
     // フォルダの存在確認とプライベート設定チェック
@@ -858,7 +896,7 @@ v2Routes.post("/users/:user_id/folders/:folder_id/items", async (c) => {
     return c.json({ error: "addition_at must be a positive number (Unix timestamp)" }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { api_keys, user_folders, user_folder_items, worlds_master } });
+  const db = createDbWithRetry(c.env.DB, { api_keys, user_folders, user_folder_items, worlds_master });
 
   try {
     // APIキーの検証
@@ -911,33 +949,14 @@ v2Routes.post("/users/:user_id/folders/:folder_id/items", async (c) => {
       }, 200);
     }
 
-    // ワールド情報の確認・追加
-    const worldExists = await db
-      .select()
-      .from(worlds_master)
-      .where(eq(worlds_master.world_id, world_id))
-      .execute();
-
-    if (worldExists.length === 0) {
-      const worldInfo = await fetchVRChatWorldInfo(world_id);
-
-      if (!worldInfo) {
-        return c.json({
-          error: "World not found or could not fetch world information",
-          world_id: world_id
-        }, 404);
-      }
-
-      await db
-        .insert(worlds_master)
-        .values({
-          world_id: world_id,
-          world_name: worldInfo.world_name,
-          world_description: worldInfo.world_description,
-          world_author_name: worldInfo.world_author_name,
-          world_thumbnail_image_url: worldInfo.world_thumbnail_image_url
-        })
-        .execute();
+    // ワールド情報の存在確認と必要に応じた更新
+    try {
+      await ensureWorldInfoUpdated(db, world_id);
+    } catch (error) {
+      return c.json({
+        error: "World not found or could not fetch world information",
+        world_id: world_id
+      }, 404);
     }
 
     // アイテム追加
@@ -994,7 +1013,7 @@ v2Routes.get("/auth/api-keys", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
-  const db = drizzle(c.env.DB, { schema: { api_keys } });
+  const db = createDbWithRetry(c.env.DB, { api_keys });
 
   try {
     const apiKeyRecord = await db
@@ -1036,7 +1055,7 @@ v2Routes.post("/auth/api-keys", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
-  const db = drizzle(c.env.DB, { schema: { api_keys } });
+  const db = createDbWithRetry(c.env.DB, { api_keys });
 
   try {
     const existingApiKey = await db
@@ -1080,7 +1099,7 @@ v2Routes.delete("/auth/api-keys", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
-  const db = drizzle(c.env.DB, { schema: { api_keys } });
+  const db = createDbWithRetry(c.env.DB, { api_keys });
 
   try {
     const existingApiKey = await db
@@ -1119,7 +1138,7 @@ v2Routes.get("/profile", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
-  const db = drizzle(c.env.DB, { schema: { users } });
+  const db = createDbWithRetry(c.env.DB, { users });
 
   try {
     const userProfile = await db
@@ -1152,7 +1171,7 @@ v2Routes.post("/profile", firebaseAuth(), async (c) => {
     return c.json({ error: "user_name is required" }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { users } });
+  const db = createDbWithRetry(c.env.DB, { users });
 
   try {
     const existingUser = await db
@@ -1201,7 +1220,7 @@ v2Routes.post("/favorites", firebaseAuth(), async (c) => {
     return c.json({ error: "folder_id is required" }, 400);
   }
 
-  const db = drizzle(c.env.DB, { schema: { user_folder_favorites, user_folders } });
+  const db = createDbWithRetry(c.env.DB, { user_folder_favorites, user_folders });
 
   try {
     // フォルダが存在するかチェック
@@ -1254,7 +1273,7 @@ v2Routes.delete("/favorites/:folder_id", firebaseAuth(), async (c) => {
   const user_id = user.userId;
   const folderId = parseInt(c.req.param("folder_id"), 10);
 
-  const db = drizzle(c.env.DB, { schema: { user_folder_favorites } });
+  const db = createDbWithRetry(c.env.DB, { user_folder_favorites });
 
   try {
     const result = await db
@@ -1280,7 +1299,7 @@ v2Routes.delete("/favorites/:folder_id", firebaseAuth(), async (c) => {
 v2Routes.get("/favorites", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
-  const db = drizzle(c.env.DB, { schema: { user_folder_favorites, user_folders, users } });
+  const db = createDbWithRetry(c.env.DB, { user_folder_favorites, user_folders, users });
 
   try {
     const favorites = await db
@@ -1299,7 +1318,7 @@ v2Routes.get("/favorites", firebaseAuth(), async (c) => {
       .execute();
 
     // フォルダが存在しない場合は除外
-    const existingFavorites = favorites.filter(favorite => favorite.folder_id !== null);
+    const existingFavorites = favorites.filter((favorite: any) => favorite.folder_id !== null);
 
     return c.json(existingFavorites);
   } catch (error) {
@@ -1313,7 +1332,7 @@ v2Routes.get("/users/:user_id/items/wppls", async (c) => {
   const user_id = c.req.param("user_id");
   const sorttype = c.req.query("sorttype") || "addition_desc"; // デフォルトはaddition_at降順
 
-  const db = drizzle(c.env.DB, { schema: { user_folders, user_folder_items, worlds_master, users } });
+  const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items, worlds_master, users });
 
   try {
     // ユーザが存在するかチェック
@@ -1348,9 +1367,9 @@ v2Routes.get("/users/:user_id/items/wppls", async (c) => {
     // フォルダごとにワールドをグループ化
     const folderMap = new Map<string, any>();
 
-    foldersWithItems.forEach(item => {
+    foldersWithItems.forEach((item: any) => {
       const folderName = item.folder_name;
-      
+
       if (!folderMap.has(folderName)) {
         folderMap.set(folderName, {
           Category: folderName,
@@ -1395,7 +1414,7 @@ v2Routes.get("/users/:user_id/items/wppls", async (c) => {
     const sortFunction = getSortFunction(sorttype);
 
     // ワールドをソートし、addition_atフィールドを削除
-    Array.from(folderMap.values()).forEach(folder => {
+    Array.from(folderMap.values()).forEach((folder: any) => {
       folder.Worlds.sort(sortFunction);
       folder.Worlds.forEach((world: any) => {
         delete world.addition_at;
