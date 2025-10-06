@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { drizzle } from "drizzle-orm/d1";
-import { worlds_master, user_folders, user_folder_items, api_keys, users, user_folder_favorites } from "../schema";
+import { worlds_master, user_folders, user_folder_items, api_keys, users, user_folder_favorites, user_folder_orders } from "../schema";
 import { and, eq, sql, asc, desc } from "drizzle-orm";
 import { firebaseAuth, getAuthenticatedUser } from "../auth";
 import { createDbWithRetry, withRetry } from "../db-utils";
@@ -67,13 +67,13 @@ async function ensureWorldInfoUpdated(db: any, world_id: string): Promise<void> 
     if (existingWorld.length > 0) {
       const world = existingWorld[0];
       const updatedAt = world.updated_at || world.created_at; // updated_atがnullの場合はcreated_atを使用
-      
+
       // 30日以上古い場合のみ更新
       if (currentTimestamp - updatedAt >= THIRTY_DAYS_IN_SECONDS) {
         console.log(`World ${world_id} is older than 30 days, attempting to update...`);
-        
+
         const worldInfo = await fetchVRChatWorldInfo(world_id);
-        
+
         if (worldInfo) {
           await db
             .update(worlds_master)
@@ -86,7 +86,7 @@ async function ensureWorldInfoUpdated(db: any, world_id: string): Promise<void> 
             })
             .where(eq(worlds_master.world_id, world_id))
             .execute();
-          
+
           console.log(`Successfully updated world info for ${world_id}`);
         } else {
           console.warn(`Failed to fetch updated world info for ${world_id}, skipping update`);
@@ -95,7 +95,7 @@ async function ensureWorldInfoUpdated(db: any, world_id: string): Promise<void> 
     } else {
       // ワールドが存在しない場合は新規作成
       const worldInfo = await fetchVRChatWorldInfo(world_id);
-      
+
       if (worldInfo) {
         await db
           .insert(worlds_master)
@@ -107,7 +107,7 @@ async function ensureWorldInfoUpdated(db: any, world_id: string): Promise<void> 
             world_thumbnail_image_url: worldInfo.world_thumbnail_image_url
           })
           .execute();
-        
+
         console.log(`Successfully created new world info for ${world_id}`);
       } else {
         throw new Error(`Could not fetch world information for ${world_id}`);
@@ -185,9 +185,9 @@ v2Routes.post("/worlds", async (c) => {
     if (existingWorld.length > 0) {
       // 既存のワールドがある場合、30日以上古いかチェックして更新
       await ensureWorldInfoUpdated(db, world_id);
-      return c.json({ 
+      return c.json({
         message: "World already exists and has been updated if necessary",
-        world_id: world_id 
+        world_id: world_id
       }, 200);
     }
 
@@ -210,9 +210,10 @@ v2Routes.get("/folders", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
   const user_id = user.userId;
 
-  const db = createDbWithRetry(c.env.DB, { user_folders });
+  const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_orders });
 
   try {
+    // フォルダ情報と順序情報を結合して取得
     const folders = await db
       .select({
         id: user_folders.id,
@@ -220,14 +221,34 @@ v2Routes.get("/folders", firebaseAuth(), async (c) => {
         is_private: user_folders.is_private,
         comment: user_folders.comment,
         created_at: user_folders.created_at,
-        updated_at: user_folders.updated_at
+        updated_at: user_folders.updated_at,
+        display_order: user_folder_orders.display_order
       })
       .from(user_folders)
+      .leftJoin(user_folder_orders, and(
+        eq(user_folders.id, user_folder_orders.folder_id),
+        eq(user_folder_orders.user_id, user_id)
+      ))
       .where(eq(user_folders.user_id, user_id))
-      .orderBy(user_folders.created_at)
+      .orderBy(
+        // display_orderがnullの場合は末尾に、それ以外は昇順
+        sql`CASE WHEN ${user_folder_orders.display_order} IS NULL THEN 1 ELSE 0 END`,
+        asc(user_folder_orders.display_order),
+        asc(user_folders.created_at)
+      )
       .execute();
 
-    return c.json(folders);
+    // display_orderフィールドをレスポンスから除外
+    const result = folders.map((folder: any) => ({
+      id: folder.id,
+      folder_name: folder.folder_name,
+      is_private: folder.is_private,
+      comment: folder.comment,
+      created_at: folder.created_at,
+      updated_at: folder.updated_at
+    }));
+
+    return c.json(result);
 
   } catch (error) {
     console.error("Error fetching folders:", error);
@@ -299,7 +320,7 @@ v2Routes.post("/folders/:folder_id/items", firebaseAuth(), async (c) => {
   const folder_id = parseFolderId(folder_id_param);
 
   if (folder_id === null) {
-    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+    return c.json({ error: "Invalid folder_id format." }, 400);
   }
   const { world_id, comment, addition_at } = await c.req.json();
 
@@ -416,7 +437,7 @@ v2Routes.get("/folders/:folder_id/items", firebaseAuth(), async (c) => {
   const folder_id = parseFolderId(folder_id_param);
 
   if (folder_id === null) {
-    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+    return c.json({ error: "Invalid folder_id format." }, 400);
   }
 
   const db = createDbWithRetry(c.env.DB, { user_folder_items, worlds_master });
@@ -452,6 +473,66 @@ v2Routes.get("/folders/:folder_id/items", firebaseAuth(), async (c) => {
   }
 });
 
+// 6a. フォルダ順序更新API (PUT) - 先に定義して競合を避ける
+v2Routes.put("/folders/order", firebaseAuth(), async (c) => {
+  const user = getAuthenticatedUser(c);
+  const user_id = user.userId;
+  const { folder_orders } = await c.req.json();
+
+  // folder_ordersの形式: [{ folder_id: number, display_order: number }, ...]
+  if (!Array.isArray(folder_orders) || folder_orders.length === 0) {
+    return c.json({ error: "folder_orders must be a non-empty array" }, 400);
+  }
+
+  const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_orders });
+
+  try {
+    // ユーザーのフォルダ存在確認
+    const userFolders = await db
+      .select({ id: user_folders.id })
+      .from(user_folders)
+      .where(eq(user_folders.user_id, user_id))
+      .execute();
+
+    const userFolderIds = new Set(userFolders.map((f: any) => f.id));
+
+    // リクエストされたフォルダIDがすべてユーザーのものか確認
+    for (const order of folder_orders) {
+      if (!userFolderIds.has(order.folder_id)) {
+        return c.json({ error: `Folder ${order.folder_id} not found or not owned by user` }, 404);
+      }
+    }
+
+    // 既存の順序データを削除
+    await db
+      .delete(user_folder_orders)
+      .where(eq(user_folder_orders.user_id, user_id))
+      .execute();
+
+    // 新しい順序データを挿入
+    const orderValues = folder_orders.map(order => ({
+      user_id: user_id,
+      folder_id: order.folder_id,
+      display_order: order.display_order
+    }));
+
+    await db
+      .insert(user_folder_orders)
+      .values(orderValues)
+      .execute();
+
+    return c.json({
+      message: "Folder order updated successfully",
+      user_id: user_id,
+      updated_count: folder_orders.length
+    });
+
+  } catch (error) {
+    console.error("Error updating folder order:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 // 6. フォルダ更新API (PUT)
 v2Routes.put("/folders/:folder_id", firebaseAuth(), async (c) => {
   const user = getAuthenticatedUser(c);
@@ -460,7 +541,7 @@ v2Routes.put("/folders/:folder_id", firebaseAuth(), async (c) => {
   const folder_id = parseFolderId(folder_id_param);
 
   if (folder_id === null) {
-    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+    return c.json({ error: "Invalid folder_id format." }, 400);
   }
   const { folder_name, is_private, comment } = await c.req.json();
 
@@ -533,7 +614,7 @@ v2Routes.delete("/folders/:folder_id", firebaseAuth(), async (c) => {
   const folder_id = parseFolderId(folder_id_param);
 
   if (folder_id === null) {
-    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+    return c.json({ error: "Invalid folder_id format." }, 400);
   }
 
   const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items });
@@ -589,7 +670,7 @@ v2Routes.put("/folders/:folder_id/items/:world_id", firebaseAuth(), async (c) =>
   const world_id = c.req.param("world_id");
 
   if (folder_id === null) {
-    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+    return c.json({ error: "Invalid folder_id format." }, 400);
   }
   const { comment } = await c.req.json();
 
@@ -649,7 +730,7 @@ v2Routes.delete("/folders/:folder_id/items/:world_id", firebaseAuth(), async (c)
   const world_id = c.req.param("world_id");
 
   if (folder_id === null) {
-    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+    return c.json({ error: "Invalid folder_id format." }, 400);
   }
 
   const db = createDbWithRetry(c.env.DB, { user_folder_items });
@@ -746,7 +827,7 @@ v2Routes.get("/folders/:folder_id/info", async (c) => {
   const folder_id = parseFolderId(folder_id_param);
 
   if (folder_id === null) {
-    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+    return c.json({ error: "Invalid folder_id format." }, 400);
   }
 
   const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items, users });
@@ -815,7 +896,7 @@ v2Routes.get("/users/:user_id/folders/:folder_id/items", async (c) => {
   const folder_id = parseFolderId(folder_id_param);
 
   if (folder_id === null) {
-    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+    return c.json({ error: "Invalid folder_id format." }, 400);
   }
 
   const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items, worlds_master });
@@ -880,7 +961,7 @@ v2Routes.post("/users/:user_id/folders/:folder_id/items", async (c) => {
   const { world_id, comment, addition_at } = await c.req.json();
 
   if (folder_id === null) {
-    return c.json({ error: "Invalid folder_id format. Must be 8 digits." }, 400);
+    return c.json({ error: "Invalid folder_id format." }, 400);
   }
 
   if (!api_key) {
@@ -1332,7 +1413,7 @@ v2Routes.get("/users/:user_id/items/wppls", async (c) => {
   const user_id = c.req.param("user_id");
   const sorttype = c.req.query("sorttype") || "addition_desc"; // デフォルトはaddition_at降順
 
-  const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items, worlds_master, users });
+  const db = createDbWithRetry(c.env.DB, { user_folders, user_folder_items, worlds_master, users, user_folder_orders });
 
   try {
     // ユーザが存在するかチェック
@@ -1345,17 +1426,22 @@ v2Routes.get("/users/:user_id/items/wppls", async (c) => {
     if (userExists.length === 0) {
       return c.json({ error: "User not found" }, 404);
     }
-    // 公開フォルダとその中身を取得
+    // 公開フォルダとその中身を取得（順序情報も含む）
     const foldersWithItems = await db
       .select({
         folder_id: user_folders.id,
         folder_name: user_folders.folder_name,
+        display_order: user_folder_orders.display_order,
         world_id: user_folder_items.world_id,
         world_name: worlds_master.world_name,
         world_description: worlds_master.world_description,
         addition_at: user_folder_items.addition_at
       })
       .from(user_folders)
+      .leftJoin(user_folder_orders, and(
+        eq(user_folders.id, user_folder_orders.folder_id),
+        eq(user_folder_orders.user_id, user_id)
+      ))
       .leftJoin(user_folder_items, eq(user_folders.id, user_folder_items.folder_id))
       .leftJoin(worlds_master, eq(user_folder_items.world_id, worlds_master.world_id))
       .where(and(
@@ -1364,22 +1450,37 @@ v2Routes.get("/users/:user_id/items/wppls", async (c) => {
       ))
       .execute();
 
-    // フォルダごとにワールドをグループ化
-    const folderMap = new Map<string, any>();
+    // フォルダごとにワールドをグループ化（display_order情報も保持）
+    interface WorldItem {
+      ID: string;
+      Name: string;
+      Description: string;
+      addition_at?: number;
+    }
+
+    interface FolderCategory {
+      Category: string;
+      Worlds: WorldItem[];
+      display_order: number | null;
+    }
+
+    const folderMap = new Map<number, FolderCategory>();
 
     foldersWithItems.forEach((item: any) => {
+      const folderId = item.folder_id;
       const folderName = item.folder_name;
 
-      if (!folderMap.has(folderName)) {
-        folderMap.set(folderName, {
+      if (!folderMap.has(folderId)) {
+        folderMap.set(folderId, {
           Category: folderName,
-          Worlds: []
+          Worlds: [],
+          display_order: item.display_order
         });
       }
 
       // ワールド情報がある場合のみ追加
       if (item.world_id && item.world_name) {
-        folderMap.get(folderName).Worlds.push({
+        folderMap.get(folderId)!.Worlds.push({
           ID: item.world_id,
           Name: item.world_name,
           Description: item.world_description || "",
@@ -1392,37 +1493,47 @@ v2Routes.get("/users/:user_id/items/wppls", async (c) => {
     const getSortFunction = (sorttype: string) => {
       switch (sorttype) {
         case "name_desc":
-          return (a: any, b: any) => b.Name.localeCompare(a.Name);
+          return (a: WorldItem, b: WorldItem) => b.Name.localeCompare(a.Name);
         case "addition_asc":
-          return (a: any, b: any) => {
+          return (a: WorldItem, b: WorldItem) => {
             const aTime = a.addition_at ? new Date(a.addition_at).getTime() : 0;
             const bTime = b.addition_at ? new Date(b.addition_at).getTime() : 0;
             return aTime - bTime;
           };
         case "addition_desc":
-          return (a: any, b: any) => {
+          return (a: WorldItem, b: WorldItem) => {
             const aTime = a.addition_at ? new Date(a.addition_at).getTime() : 0;
             const bTime = b.addition_at ? new Date(b.addition_at).getTime() : 0;
             return bTime - aTime;
           };
         case "name_asc":
         default:
-          return (a: any, b: any) => a.Name.localeCompare(b.Name);
+          return (a: WorldItem, b: WorldItem) => a.Name.localeCompare(b.Name);
       }
     };
 
     const sortFunction = getSortFunction(sorttype);
 
-    // ワールドをソートし、addition_atフィールドを削除
-    Array.from(folderMap.values()).forEach((folder: any) => {
+    // フォルダを配列に変換してソート
+    const sortedFolders = Array.from(folderMap.values()).sort((a, b) => {
+      // display_orderがnullの場合は末尾に
+      if (a.display_order === null && b.display_order === null) return 0;
+      if (a.display_order === null) return 1;
+      if (b.display_order === null) return -1;
+      return a.display_order - b.display_order;
+    });
+
+    // 各フォルダ内のワールドをソートし、addition_atとdisplay_orderフィールドを削除
+    sortedFolders.forEach((folder: FolderCategory) => {
       folder.Worlds.sort(sortFunction);
-      folder.Worlds.forEach((world: any) => {
+      folder.Worlds.forEach((world: WorldItem) => {
         delete world.addition_at;
       });
+      delete (folder as any).display_order;
     });
 
     const result = {
-      Categorys: Array.from(folderMap.values())
+      Categorys: sortedFolders
     };
 
     return c.json(result);

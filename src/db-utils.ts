@@ -20,16 +20,16 @@ function sleep(ms: number): Promise<void> {
 
 function isNetworkError(error: any): boolean {
   if (!error) return false;
-  
+
   const errorMessage = error.message || error.toString();
-  
+
   return errorMessage.includes('Network connection lost') ||
-         errorMessage.includes('connection lost') ||
-         errorMessage.includes('network error') ||
-         errorMessage.includes('timeout') ||
-         errorMessage.includes('ECONNRESET') ||
-         errorMessage.includes('ENOTFOUND') ||
-         errorMessage.includes('ETIMEDOUT');
+    errorMessage.includes('connection lost') ||
+    errorMessage.includes('network error') ||
+    errorMessage.includes('timeout') ||
+    errorMessage.includes('ECONNRESET') ||
+    errorMessage.includes('ENOTFOUND') ||
+    errorMessage.includes('ETIMEDOUT');
 }
 
 export async function withRetry<T>(
@@ -44,7 +44,7 @@ export async function withRetry<T>(
       return await operation();
     } catch (error) {
       lastError = error;
-      
+
       // ネットワークエラーでない場合、またはmax retriesに達した場合はすぐに失敗
       if (!isNetworkError(error) || attempt === opts.maxRetries) {
         throw error;
@@ -56,8 +56,8 @@ export async function withRetry<T>(
         opts.maxDelay
       );
 
-      console.warn(`Database operation failed (attempt ${attempt + 1}/${opts.maxRetries + 1}): ${error.message}. Retrying in ${delay}ms...`);
-      
+      console.warn(`Database operation failed (attempt ${attempt + 1}/${opts.maxRetries + 1}): ${error instanceof Error ? error.message : String(error)}. Retrying in ${delay}ms...`);
+
       await sleep(delay);
     }
   }
@@ -74,20 +74,20 @@ function wrapWithRetry(obj: any): any {
   return new Proxy(obj, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver);
-      
+
       // executeメソッドをリトライ機能でラップ
       if (prop === 'execute' && typeof value === 'function') {
         return () => withRetry(() => value.call(target));
       }
-      
+
       // 関数の場合、その結果もラップする
       if (typeof value === 'function') {
-        return function(...args: any[]) {
+        return function (...args: any[]) {
           const result = value.apply(target, args);
           return wrapWithRetry(result);
         };
       }
-      
+
       return value;
     }
   });
