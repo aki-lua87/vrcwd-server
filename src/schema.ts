@@ -47,6 +47,21 @@ export const user_folder_favorites = sqliteTable(
     }
 );
 
+// フォルダ表示順序テーブル
+export const user_folder_orders = sqliteTable(
+    "user_folder_orders",
+    {
+        id: integer("id", { mode: "number" }).primaryKey({ autoIncrement: true }),
+        user_id: text("user_id").notNull(), // ユーザID
+        folder_id: integer("folder_id", { mode: "number" }).notNull(), // フォルダID
+        display_order: integer("display_order", { mode: "number" }).notNull(), // 表示順序（小さいほど上位）
+        created_at: integer("created_at", { mode: 'timestamp' }).default(sql`(cast (unixepoch () as int))`),
+        updated_at: integer("updated_at", { mode: 'timestamp' }).default(sql`(cast (unixepoch () as int))`),
+    }, (table) => {
+        return { user_folder_orders_index: unique("unique_user_folder_orders").on(table.user_id, table.folder_id) }
+    }
+);
+
 // ワールドマスタテーブル
 export const worlds_master = sqliteTable(
     "worlds_master",
