@@ -5,6 +5,7 @@ import { worlds_master, user_folders, user_folder_items, api_keys, users, user_f
 import { and, eq, sql, asc, desc } from "drizzle-orm";
 import { firebaseAuth, getAuthenticatedUser } from "../auth";
 import { createDbWithRetry, withRetry } from "../db-utils";
+import { decodeHtmlEntities } from "../utils";
 
 type Bindings = {
   DB: D1Database;
@@ -42,9 +43,9 @@ async function fetchVRChatWorldInfo(worldId: string): Promise<{
     const worldDescription = descriptionMatch ? descriptionMatch[1] : '';
 
     return {
-      world_name: worldNameMatch[1],
-      world_description: worldDescription,
-      world_author_name: worldNameMatch[2],
+      world_name: decodeHtmlEntities(worldNameMatch[1]),
+      world_description: decodeHtmlEntities(worldDescription),
+      world_author_name: decodeHtmlEntities(worldNameMatch[2]),
       world_thumbnail_image_url: imageMatch[1]
     };
   } catch (error) {
