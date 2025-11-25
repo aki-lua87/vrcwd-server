@@ -1,5 +1,4 @@
 export function decodeHtmlEntities(text: string): string {
-  if (!text) return text;
   
   const entities: { [key: string]: string } = {
     '&amp;': '&',
