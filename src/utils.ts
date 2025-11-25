@@ -13,7 +13,7 @@ export function decodeHtmlEntities(text: string): string {
     '&nbsp;': ' '
   };
 
-  return text.replace(/&[#\w]+;/g, (entity) => {
+  return text.replace(/&[#\w-]+;/g, (entity) => {
     if (entities[entity]) return entities[entity];
     
     // Handle numeric entities
