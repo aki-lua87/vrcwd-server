@@ -504,23 +504,31 @@ v2Routes.put("/folders/order", firebaseAuth(), async (c) => {
       }
     }
 
-    // 既存の順序データを削除
-    await db
-      .delete(user_folder_orders)
-      .where(eq(user_folder_orders.user_id, user_id))
-      .execute();
-
-    // 新しい順序データを挿入
     const orderValues = folder_orders.map(order => ({
       user_id: user_id,
       folder_id: order.folder_id,
       display_order: order.display_order
     }));
 
-    await db
-      .insert(user_folder_orders)
-      .values(orderValues)
-      .execute();
+    // D1はSQLバインド変数の上限があるため、チャンク分割してINSERT
+    // 1行あたり3変数(user_id, folder_id, display_order)なので30行ずつ処理
+    const CHUNK_SIZE = 30;
+    const chunks: typeof orderValues[] = [];
+    for (let i = 0; i < orderValues.length; i += CHUNK_SIZE) {
+      chunks.push(orderValues.slice(i, i + CHUNK_SIZE));
+    }
+
+    // D1はBEGIN TRANSACTIONが使えないため、batch()でアトミックに実行
+    const rawDb = drizzle(c.env.DB, { schema: { user_folders, user_folder_orders } });
+    const deleteStatement = rawDb
+      .delete(user_folder_orders)
+      .where(eq(user_folder_orders.user_id, user_id));
+
+    const insertStatements = chunks.map(chunk =>
+      rawDb.insert(user_folder_orders).values(chunk)
+    );
+
+    await rawDb.batch([deleteStatement, ...insertStatements]);
 
     return c.json({
       message: "Folder order updated successfully",
